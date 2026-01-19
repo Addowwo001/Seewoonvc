@@ -1,0 +1,10 @@
+D:/Anli/RIG-PY/RandomX/build/CMakeFiles/randomx.dir
+D:/Anli/RIG-PY/RandomX/build/CMakeFiles/randomx-tests.dir
+D:/Anli/RIG-PY/RandomX/build/CMakeFiles/randomx-codegen.dir
+D:/Anli/RIG-PY/RandomX/build/CMakeFiles/randomx-benchmark.dir
+D:/Anli/RIG-PY/RandomX/build/CMakeFiles/edit_cache.dir
+D:/Anli/RIG-PY/RandomX/build/CMakeFiles/rebuild_cache.dir
+D:/Anli/RIG-PY/RandomX/build/CMakeFiles/list_install_components.dir
+D:/Anli/RIG-PY/RandomX/build/CMakeFiles/install.dir
+D:/Anli/RIG-PY/RandomX/build/CMakeFiles/install/local.dir
+D:/Anli/RIG-PY/RandomX/build/CMakeFiles/install/strip.dir
