@@ -534,157 +534,118 @@ def stratum_recv_loop(sock):
             shutdown_flag.set()
             break
 def mining_worker(worker_id, flags, initial_seed):
-    """
-    Mining worker thread performing RandomX hash calculations
-    Args:
-        worker_id: Unique identifier for this worker
-        flags: RandomX configuration flags
-        initial_seed: Initial seed for RandomX initialization
-    """
-    global current_batch_size, batch_avg_time, last_batch_reset, hash_counter
+    global current_batch_size, hash_counter
+
     try:
         SetThreadPriority = ctypes.windll.kernel32.SetThreadPriority
         GetCurrentThread = ctypes.windll.kernel32.GetCurrentThread
         SetThreadPriority(GetCurrentThread(), 2)
     except Exception:
         pass
+
     vm = RandomXVM(flags, initial_seed, worker_id)
     if not vm.wait_until_ready(args.init_timeout):
         print(f"[ERROR] Worker {worker_id} VM init timeout")
         return
+
     current_job_data = None
     current_target_int = None
     current_blob_template = None
     current_nonce_offset = 39
+
     hash_output_buffer = ffi.new("char[32]")
+
     while not shutdown_flag.is_set():
+
+        # ===== SEED CHANGE =====
         if seed_changed_flag.is_set():
-            if not args.background:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}]  cpu      worker {worker_id}: rebuilding VM (new seed)")
             vm.destroy()
             vm = RandomXVM(flags, current_seed_hash, worker_id)
             if not vm.wait_until_ready(args.init_timeout):
-                print(f"[ERROR] Worker {worker_id} VM reinit failed")
                 return
-            seed_changed_flag.clear()
             current_job_data = None
             continue
+
+        # ===== JOB FETCH =====
         new_job = None
-        if current_job_data is None:
-            # Belum punya job — blocking wait
-            try:
+
+        try:
+            if current_job_data is None:
                 new_job = job_queue.get(timeout=0.5)
-            except queue.Empty:
-                pass
-        else:
-            # Sudah punya job — cuma peek kalau ada update
-            try:
+            else:
                 new_job = job_queue.get_nowait()
-            except queue.Empty:
-                pass  # Keep mining dengan job sekarang
-        if new_job and (current_job_data is None or new_job.get("job_id") != current_job_data.get("job_id")):
-            current_job_data = new_job
-            current_blob_template = bytearray(hex_to_bytes(new_job["blob"]))
-            current_nonce_offset = new_job.get("nonce_offset", 39)
-            target_hex = new_job["target"]
+        except queue.Empty:
+            pass
+
+        if new_job and (current_job_data is None or new_job["job_id"] != current_job_data["job_id"]):
             try:
-                target_bytes = convert_compact_target_to_bytes(target_hex)
-                current_target_int = int.from_bytes(target_bytes, 'big')
-                if args.debug and worker_id == 0 and not args.background:
-                    difficulty = calculate_monero_difficulty(target_hex)
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}]  [DEBUG] worker {worker_id} new job: diff={difficulty:,.0f}, target=0x{current_target_int:016x}")
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}]  [DEBUG-HASH] Job ID: {new_job['job_id'][:8]}...")
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}]  [DEBUG-HASH] Blob: {new_job['blob'][:16]}...")
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}]  [DEBUG-HASH] Nonce offset: {current_nonce_offset}")
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}]  [DEBUG-HASH] Initial blob (hex): {current_blob_template.hex()}")
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}]  [DEBUG-HASH] Initial blob length: {len(current_blob_template)}")
-            except Exception as e:
-                BackgroundLogger.error(f"Worker {worker_id}: Target conversion failed: {e}")
+                current_job_data = new_job
+                current_blob_template = bytearray(hex_to_bytes(new_job["blob"]))
+                current_nonce_offset = new_job.get("nonce_offset", 39)
+
+                target_bytes = convert_compact_target_to_bytes(new_job["target"])
+                current_target_int = int.from_bytes(target_bytes, "big")
+            except Exception:
                 current_job_data = None
                 continue
+
         if current_job_data is None:
             time.sleep(0.001)
             continue
-        hashes_this_batch = 0
-        batch_start = time.time()
+
+        # ===== BATCH =====
         with batch_lock:
-            batch_size = max(current_batch_size, BATCH_MIN)
-        if args.debug and worker_id == 0 and not args.background:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}]  [DEBUG-BATCH] Worker {worker_id} starting batch of {batch_size}")
-        for i in range(batch_size):
+            batch_size = 100
+            #batch_size = max(current_batch_size, BATCH_MIN)
+
+        local_count = 0
+
+        for _ in range(batch_size):
             if shutdown_flag.is_set():
                 break
+
             nonce = vm.get_next_nonce()
-            current_blob_template[current_nonce_offset:current_nonce_offset + 4] = struct.pack("<I", nonce)
+            current_blob_template[current_nonce_offset:current_nonce_offset+4] = struct.pack("<I", nonce)
+
             try:
-                randomx.randomx_calculate_hash(vm.vm, bytes(current_blob_template), len(current_blob_template), hash_output_buffer)
-                hash_bytes = bytes(ffi.buffer(hash_output_buffer, 32))
-                hash_64bit_le = hash_bytes[0:8]
-                hash_int = int.from_bytes(hash_64bit_le, 'little')
-                hashes_this_batch += 1
-                if args.debug and worker_id == 0 and not args.background and i % 2000 == 0:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}]  [DEBUG-HASH] Worker {worker_id} hash[{i}]: 0x{hash_int:016x}, target: 0x{current_target_int:016x}")
-                if hash_int < current_target_int and meets_submit_throttle(hash_int, args.submit_throttle):
-                    result_hex = bytes_to_hex(hash_bytes)
-                    nonce_hex = struct.pack("<I", nonce).hex()
-                    if args.debug and not args.background:
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}]  [DEBUG-SHARE] Worker {worker_id} FOUND SHARE!")
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}]  [DEBUG-SHARE] Nonce: 0x{nonce_hex} ({nonce})")
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}]  [DEBUG-SHARE] Hash (64-bit): 0x{hash_int:016x}")
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}]  [DEBUG-SHARE] Target: 0x{current_target_int:016x}")
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}]  [DEBUG-SHARE] Full hash: {result_hex}")
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}]  [DEBUG-SHARE] Job ID: {current_job_data['job_id'][:8]}...")
-                    try:
-                        submit_queue.put_nowait({
-                            "job_id": current_job_data["job_id"],
-                            "nonce": nonce_hex,
-                            "result": result_hex,
-                            "worker_id": worker_id,
-                            "timestamp": time.time()
-                        })
-                    except queue.Full:
-                        if args.debug and not args.background:
-                            print(f"[{datetime.now().strftime('%H:%M:%S')}]  [DEBUG-SHARE] Submit queue full!")
-                    break
-            except Exception as e:
-                if args.debug:
-                    BackgroundLogger.debug(f"Worker {worker_id}: Hash calculation error: {e}")
+                randomx.randomx_calculate_hash(
+                    vm.vm,
+                    bytes(current_blob_template),
+                    len(current_blob_template),
+                    hash_output_buffer
+                )
+            except Exception:
                 continue
-        if hashes_this_batch > 0:
+
+            hash_bytes = bytes(ffi.buffer(hash_output_buffer, 32))
+            hash_int = int.from_bytes(hash_bytes[:8], "little")
+
+            local_count += 1
+
+            # smooth counter update
+            if local_count >= 50:
+                with hash_counter_lock:
+                    hash_counter += local_count
+                local_count = 0
+
+            # submit share
+            if hash_int < current_target_int and meets_submit_throttle(hash_int, args.submit_throttle):
+                try:
+                    submit_queue.put_nowait({
+                        "job_id": current_job_data["job_id"],
+                        "nonce": struct.pack("<I", nonce).hex(),
+                        "result": bytes_to_hex(hash_bytes),
+                        "worker_id": worker_id,
+                        "timestamp": time.time()
+                    })
+                except queue.Full:
+                    pass
+
+        # flush remainder
+        if local_count:
             with hash_counter_lock:
-                hash_counter += hashes_this_batch
-            update_stats(hashes=hashes_this_batch)
-            if args.debug and worker_id == 0 and not args.background:
-                pass
-                #print(f"[{datetime.now().strftime('%H:%M:%S')}]  [DEBUG-BATCH] Worker {worker_id} completed batch: {hashes_this_batch} hashes")
-            print(f"[DEBUG] Worker {worker_id} completed batch: {hashes_this_batch} hashes in {time.time() - batch_start:.3f}s")
-        batch_time = time.time() - batch_start
-        if batch_time > 0 and hashes_this_batch > 0:
-            alpha = 0.05  
-            batch_avg_time = (1 - alpha) * batch_avg_time + alpha * batch_time
-            scale = TARGET_BATCH_TIME / batch_avg_time
-            scale = max(0.5, min(2.0, scale))  # Batasi perubahan maksimal 2x
-            target_batch = int(batch_size * scale)
-            adjustment_factor = 0.1
-            new_batch = int(batch_size + (target_batch - batch_size) * adjustment_factor)
-            min_change_threshold = 100
-            if abs(new_batch - batch_size) < min_change_threshold:
-                new_batch = batch_size  # Tidak ada perubahan kecil
-            new_batch = max(BATCH_MIN, min(new_batch, BATCH_MAX))
-            if new_batch != batch_size:
-                with batch_lock:
-                    current_batch_size = new_batch
-                if args.debug and worker_id == 0 and not args.background:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}]  [BATCH-ADJUST] {batch_size} → {new_batch} (time: {batch_time:.3f}s, avg: {batch_avg_time:.3f}s)")
-        if worker_id == 0:
-            now = time.time()
-            if now - last_batch_reset > BATCH_RESET_INTERVAL:
-                with batch_lock:
-                    current_batch_size = 1500
-                    batch_avg_time = TARGET_BATCH_TIME
-                last_batch_reset = now
-                if args.debug and worker_id == 0 and not args.background:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}]  [BATCH-RESET] Reset batch size to 1500")
+                hash_counter += local_count
+
     vm.destroy()
     if not args.background:
         print(f"[{datetime.now().strftime('%H:%M:%S')}]  [CPU] worker {worker_id}: stopped")
