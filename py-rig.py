@@ -27,10 +27,10 @@ global_randomx_cache = None
 global_randomx_dataset = None
 global_randomx_lock = threading.Lock()
 global_seed_hash = None
-BATCH_MIN = 300
+BATCH_MIN = 100
 SUBMIT_TIMEOUT = 15
-BATCH_MAX = 6000
-TARGET_BATCH_TIME = 0.25
+BATCH_MAX = 5000
+TARGET_BATCH_TIME = 0.2
 last_batch_reset = time.time()
 BATCH_RESET_INTERVAL = 300
 current_seed_hash = None
@@ -552,7 +552,6 @@ def mining_worker(worker_id, flags, initial_seed):
     current_target_int = None
     current_blob_template = None
     current_nonce_offset = 39
-
     hash_output_buffer = ffi.new("char[32]")
 
     while not shutdown_flag.is_set():
@@ -563,49 +562,44 @@ def mining_worker(worker_id, flags, initial_seed):
             vm = RandomXVM(flags, current_seed_hash, worker_id)
             if not vm.wait_until_ready(args.init_timeout):
                 return
+            seed_changed_flag.clear()
             current_job_data = None
             continue
 
-        # ===== JOB FETCH =====
-        new_job = None
-
+        # ===== GET JOB =====
         try:
-            if current_job_data is None:
-                new_job = job_queue.get(timeout=0.5)
-            else:
-                new_job = job_queue.get_nowait()
+            new_job = job_queue.get_nowait()
         except queue.Empty:
-            pass
+            new_job = None
 
         if new_job and (current_job_data is None or new_job["job_id"] != current_job_data["job_id"]):
-            try:
-                current_job_data = new_job
-                current_blob_template = bytearray(hex_to_bytes(new_job["blob"]))
-                current_nonce_offset = new_job.get("nonce_offset", 39)
+            current_job_data = new_job
+            current_blob_template = bytearray(hex_to_bytes(new_job["blob"]))
+            current_nonce_offset = new_job.get("nonce_offset", 39)
 
-                target_bytes = convert_compact_target_to_bytes(new_job["target"])
-                current_target_int = int.from_bytes(target_bytes, "big")
-            except Exception:
-                current_job_data = None
-                continue
+            target_bytes = convert_compact_target_to_bytes(new_job["target"])
+            current_target_int = int.from_bytes(target_bytes, "big")
 
         if current_job_data is None:
             time.sleep(0.001)
             continue
 
-        # ===== BATCH =====
-        with batch_lock:
-            batch_size = 100
-            #batch_size = max(current_batch_size, BATCH_MIN)
+        # =========================
+        # MINING BATCH
+        # =========================
 
+        with batch_lock:
+            batch_size = max(current_batch_size, BATCH_MIN)
+
+        batch_start = time.time()
         local_count = 0
 
-        for _ in range(batch_size):
+        for i in range(batch_size):
             if shutdown_flag.is_set():
                 break
 
             nonce = vm.get_next_nonce()
-            current_blob_template[current_nonce_offset:current_nonce_offset+4] = struct.pack("<I", nonce)
+            current_blob_template[current_nonce_offset:current_nonce_offset + 4] = struct.pack("<I", nonce)
 
             try:
                 randomx.randomx_calculate_hash(
@@ -618,11 +612,10 @@ def mining_worker(worker_id, flags, initial_seed):
                 continue
 
             hash_bytes = bytes(ffi.buffer(hash_output_buffer, 32))
-            hash_int = int.from_bytes(hash_bytes[:8], "little")
+            hash_int = int.from_bytes(hash_bytes[0:8], "little")
 
+            # realtime counter (smooth)
             local_count += 1
-
-            # smooth counter update
             if local_count >= 50:
                 with hash_counter_lock:
                     hash_counter += local_count
@@ -645,6 +638,28 @@ def mining_worker(worker_id, flags, initial_seed):
         if local_count:
             with hash_counter_lock:
                 hash_counter += local_count
+
+        # =========================
+        # ADAPTIVE BATCH (STABLE)
+        # =========================
+
+        batch_time = time.time() - batch_start
+
+        if batch_time > 0:
+            scale = TARGET_BATCH_TIME / batch_time
+            scale = max(0.7, min(1.4, scale))   # smooth like xmrig
+
+            new_batch = int(batch_size * scale)
+            new_batch = max(BATCH_MIN, min(new_batch, BATCH_MAX))
+
+            with batch_lock:
+                current_batch_size = new_batch
+
+            if args.debug and worker_id == 0 and not args.background:
+                print(
+                    f"[{datetime.now().strftime('%H:%M:%S')}] "
+                    f"[BATCH] {batch_size} → {new_batch} ({batch_time:.3f}s)"
+                )
 
     vm.destroy()
     if not args.background:
