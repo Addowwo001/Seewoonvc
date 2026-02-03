@@ -366,7 +366,7 @@ def print_stats():
             return f"{h/1_000:.2f} kH/s"
         else:
             return f"{h:.2f} H/s"
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  [APP] speed {format_hashrate(rate_now)} /now {format_hashrate(rate_10s)} /10s {format_hashrate(rate_60s)} /60s")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}]  [APP] speed now {format_hashrate(rate_now)} 10s {format_hashrate(rate_10s)} 60s {format_hashrate(rate_60s)}")
     total = accepted + rejected
     if total:
         ratio = accepted / total * 100
