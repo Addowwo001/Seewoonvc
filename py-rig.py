@@ -19,6 +19,9 @@
 import os, sys, time, ssl, json, socket, psutil, struct, threading, queue, argparse, platform, ctypes
 from datetime import datetime; from cffi import FFI
 
+# For GitHub console
+sys.stdout.reconfigure(encoding='utf-8')
+
 # Semua global variables
 hash_counter = 0
 hash_counter_lock = threading.Lock()
