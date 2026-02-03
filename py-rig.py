@@ -653,8 +653,11 @@ def mining_worker(worker_id, flags, initial_seed):
         if hashes_this_batch > 0:
             with hash_counter_lock:
                 hash_counter += hashes_this_batch
+            update_stats(hashes=hashes_this_batch)
             if args.debug and worker_id == 0 and not args.background:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}]  [DEBUG-BATCH] Worker {worker_id} completed batch: {hashes_this_batch} hashes")
+                pass
+                #print(f"[{datetime.now().strftime('%H:%M:%S')}]  [DEBUG-BATCH] Worker {worker_id} completed batch: {hashes_this_batch} hashes")
+            print(f"[DEBUG] Worker {worker_id} completed batch: {hashes_this_batch} hashes in {time.time() - batch_start:.3f}s")
         batch_time = time.time() - batch_start
         if batch_time > 0 and hashes_this_batch > 0:
             alpha = 0.05  
