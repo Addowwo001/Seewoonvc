@@ -570,10 +570,18 @@ def mining_worker(worker_id, flags, initial_seed):
             current_job_data = None
             continue
         new_job = None
-        try:
-            new_job = job_queue.get(timeout=0.1)
-        except queue.Empty:
-            pass
+        if current_job_data is None:
+            # Belum punya job — blocking wait
+            try:
+                new_job = job_queue.get(timeout=0.5)
+            except queue.Empty:
+                pass
+        else:
+            # Sudah punya job — cuma peek kalau ada update
+            try:
+                new_job = job_queue.get_nowait()
+            except queue.Empty:
+                pass  # Keep mining dengan job sekarang
         if new_job and (current_job_data is None or new_job.get("job_id") != current_job_data.get("job_id")):
             current_job_data = new_job
             current_blob_template = bytearray(hex_to_bytes(new_job["blob"]))
