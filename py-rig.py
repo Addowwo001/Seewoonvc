@@ -132,8 +132,8 @@ def display_startup_banner():
     print(f"[{datetime.now().strftime('%H:%M:%S')}]  * CONFIGURATION")
     print(f"[{datetime.now().strftime('%H:%M:%S')}]  * POOL ADDRESS    : stratum+tcp://{args.url}")
     print(f"[{datetime.now().strftime('%H:%M:%S')}]  * WALLET ADDRESS  : {args.user}")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * RANDOMX MODE    : {args.mode} | Your total memory ({psutil.virtual_memory().total // 1024**3}GB)")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * CPU THREADS     : {args.threads}T | Your CPU ({platform.processor()}, {psutil.cpu_count(logical=False)}C, {psutil.cpu_count(logical=True)}T)")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * RANDOMX MODE    : {args.mode} | Total memory ({psutil.virtual_memory().total // 1024**3}GB)")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * CPU THREADS     : {args.threads}T | ({platform.processor()}, {psutil.cpu_count(logical=False)}C, {psutil.cpu_count(logical=True)}T)")
     print(f"[{datetime.now().strftime('%H:%M:%S')}]  * TLS/SSL CONNECT : {args.tls}")
     print(f"[{datetime.now().strftime('%H:%M:%S')}]  * TIMEOUT INIT    : {args.init_timeout}s | RandomX init timeout default 120s")
     print(f"[{datetime.now().strftime('%H:%M:%S')}]  * Throttle Submit : {args.submit_throttle}")
@@ -571,7 +571,7 @@ def mining_worker(worker_id, flags, initial_seed):
             continue
         new_job = None
         try:
-            new_job = job_queue.get(timeout=0.01)
+            new_job = job_queue.get(timeout=0.1)
         except queue.Empty:
             pass
         if new_job and (current_job_data is None or new_job.get("job_id") != current_job_data.get("job_id")):
@@ -690,7 +690,7 @@ def job_queue_monitor():
                     job_queue.put_nowait({**latest_job, "version": current_version})
                 except queue.Full:
                     break
-        time.sleep(0.5)
+        time.sleep(0.05)
 def submit_worker(sock):
     """
     Worker thread for submitting shares to pool
