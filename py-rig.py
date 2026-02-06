@@ -497,8 +497,10 @@ def reconnect_to_pool():
             }
         }
         stratum_send(new_socket, login_msg)
+        
         response = None
         timeout = time.time() + 10
+        
         while time.time() < timeout and not shutdown_flag.is_set():
             try:
                 msg = net_queue.get(timeout=1)
@@ -507,5 +509,6 @@ def reconnect_to_pool():
                     break
             except queue.Empty:
                 continue
+        
         if not response or response.get("error"):
-            error_msg = response.get("error") if response else 
+            error_msg = response.get
