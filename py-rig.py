@@ -499,21 +499,21 @@ def reconnect_to_pool():
                 "agent": "XMRig/6.20.0 (Windows NT 10.0; Win64; x64)"
             }
         }
-        stratum_send(new_socket, login_msg)
+        try:
+            stratum_send(new_socket, login_msg)
         
-        response = None
-        timeout = time.time() + 10
+            response = None
+            timeout = time.time() + 10
         
-        while time.time() < timeout and not shutdown_flag.is_set():
-            try:
-                msg = net_queue.get(timeout=1)
-                if msg.get("id") == 1:
-                    response = msg
-                    break
-            except queue.Empty:
-                continue
+            while time.time() < timeout and not shutdown_flag.is_set():
+                try:
+                    msg = net_queue.get(timeout=1)
+                    if msg.get("id") == 1:
+                        response = msg
+                        break
+                except queue.Empty:
+                    continue
         
-        if not response or response.get("error"):
-            error_msg = response.get("error") if response else "timeout"
-            BackgroundLogger.error(f"Reconnect failed: {error_msg}")
-          
+            if not response or response.get("error"):
+                error_msg = response.get("error") if response else "timeout"
+              
