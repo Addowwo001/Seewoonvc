@@ -9,17 +9,20 @@
 #
 # PYRIG is distributed in the hope that it will be useful,
 # but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 # GNU General Public License for more details.
 #
 # You should have received a copy of the GNU General Public License
-# along with PYRIG. If not, see <https://www.gnu.org/licenses/>.
+# along with PYRIG.  If not, see <https://www.gnu.org/licenses/>.
 
-# Import libraries
-import traceback, os, sys, time, ssl, json, socket, psutil, struct, threading, queue, argparse, platform, ctypes
-from datetime import datetime; from cffi import FFI; from colorama import init, Fore, Style; init()
+# Import daftar pustaka
+import os, sys, time, ssl, json, socket, psutil, struct, threading, queue, argparse, platform, ctypes
+from datetime import datetime; from cffi import FFI
 
-# All global variables
+# For GitHub console
+sys.stdout.reconfigure(encoding='utf-8')
+
+# Semua global variables
 hash_counter = 0
 hash_counter_lock = threading.Lock()
 seed_changed_flag = threading.Event()
@@ -67,22 +70,26 @@ previous_valid_job_id = None
 current_valid_job_lock = threading.Lock()
 
 # Argument Parser
-parser = argparse.ArgumentParser(description="PYRIG (V.4.0) - CPU Miner", formatter_class=argparse.RawDescriptionHelpFormatter)
+parser = argparse.ArgumentParser(description="PY-RIG (V.2.0.1) - Monero CPU Miner", formatter_class=argparse.RawDescriptionHelpFormatter)
 parser.add_argument("-o", "--url", dest="url",
-    default="gulf.moneroocean.stream:443",
+    default="66.23.199.44:20001",
     help="Pool URL in format host:port (stratum+tcp:// prefix optional)")
 parser.add_argument("-u", "--user", dest="user",
     default="43jBxAR5zV4HvJLpMzECjt6QLs3zEhrhfKqxaRVGfY2f614Do1NbFgZekjtdE9fDRw6R4fP2q2N2i7427bsLTSxdCGFVfmr",
     help="Wallet address and optional worker name for pool authentication")
 parser.add_argument("-p", "--password", dest="password",
-    default="x",
+    default="d=10000",
     help="Password for pool authentication (default: 'x')")
 parser.add_argument("--tls", action="store_true", dest="tls",
+    default=True,
     help="Enable TLS/SSL encryption for pool connection (default)")
+parser.add_argument("--no-tls", action="store_false", dest="tls",
+    help="Disable TLS/SSL encryption for pool connection")
 parser.add_argument("--tls-insecure", action="store_true",
+    default=False,
     help="Disable TLS certificate verification (use with caution)")
 parser.add_argument("--mode", dest="mode", choices=["full", "light"],
-    default="full",
+    default="light",
     help="RandomX mining mode: 'full' for 2GB dataset or 'light' for cache-only")
 parser.add_argument("-t", "--threads", dest="threads", type=int,
     default=f"{max(1, os.cpu_count() - 1)}",
@@ -101,46 +108,42 @@ parser.add_argument("--submit-throttle", dest="submit_throttle", type=int,
     help="Maximum difficulty threshold for share submission to reduce network load")
 args = parser.parse_args()
 
-# Background logger utility class
+# Class fungsi untuk background logger
 class BackgroundLogger:
     """Logging utility with background mode awareness"""
     @staticmethod
     def debug(message):
         """Log debug message only when debug mode is enabled"""
         if args.debug and not args.background:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Fore.YELLOW}[DEBUG]{Style.RESET_ALL} {message}")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}]  [DEBUG] {message}")
     @staticmethod
     def error(message):
         """Log error message (always displayed)"""
-        print(Fore.RED + f"[{datetime.now().strftime('%H:%M:%S')}]  [ERROR] {message} " + Style.RESET_ALL)
+        print(f"[{datetime.now().strftime('%H:%M:%S')}]  [ERROR] {message}")
 
-# Display program logo
-def shorten_wallet(addr, start=24, end=4):
-    """Shorten wallet address for display if too long"""
-    if len(addr) <= start + end:
-        return addr
-    return addr[:start] + "..." + addr[-end:]
+# Display logo program
 def display_startup_banner():
     """Display miner startup banner with configuration summary"""
     if args.background:
         return
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * {Fore.GREEN}PYRIG (V.4.0){Style.RESET_ALL} / Python Interpreter Version ({sys.version.split()[0]})")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  *")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * ABOUT           : https://github.com/codeanli/pyrig")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * DONATE          : USDT: 0x7FF1753ac9fb1fb2008f1328bd79d0d70B7D3831 (BSC)")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * SYSTEM INFO     : Microsoft ({platform.system}/{platform.node} {platform.release} {platform.version} {platform.machine})")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  *")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}]  {'*' * 15}")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * PYRIG (V.2.0.1) / Python Version ({sys.version.split()[0]})")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}]  {'*' * 15}")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * ABOUT     : https://github.com/codeanli/py-rig")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * DONATE    : USDT: 0x7FF1753ac9fb1fb2008f1328bd79d0d70B7D3831 (BSC)")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}]  {'*' * 15}")
     print(f"[{datetime.now().strftime('%H:%M:%S')}]  * CONFIGURATION")
     print(f"[{datetime.now().strftime('%H:%M:%S')}]  * POOL ADDRESS    : stratum+tcp://{args.url}")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * WALLET ADDRESS  : {shorten_wallet(args.user)}")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * RANDOMX MODE    : {args.mode} ('full' for 2GB dataset or 'light' for cache-only)")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * CPU THREADS     : {args.threads}T ({platform.processor()}, {psutil.cpu_count(logical=False)}C, {psutil.cpu_count(logical=True)}T)")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * TLS/SSL CONNECT : {args.tls} (TLS insecure mode {Fore.GREEN}{args.tls_insecure}{Style.RESET_ALL}")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * TIMEOUT INIT    : {args.init_timeout}s (RandomX init timeout default 120s)")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * THROTTLE SUBMIT : {args.submit_throttle}")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * WALLET ADDRESS  : {args.user}")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * RANDOMX MODE    : {args.mode} | Total memory ({psutil.virtual_memory().total // 1024**3}GB)")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * CPU THREADS     : {args.threads}T | ({platform.processor()}, {psutil.cpu_count(logical=False)}C, {psutil.cpu_count(logical=True)}T)")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * TLS/SSL CONNECT : {args.tls}")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * TIMEOUT INIT    : {args.init_timeout}s | RandomX init timeout default 120s")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * Throttle Submit : {args.submit_throttle}")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}]  {'*' * 15}")
 display_startup_banner()
 
-# Program support functions
+# Fungsi pendukung program
 def stratum_send(sock, message):
     """
     Send JSON message to stratum pool server
@@ -149,12 +152,12 @@ def stratum_send(sock, message):
         message: Dictionary containing stratum protocol message
     """
     if args.debug and not args.background:
-        BackgroundLogger.debug(f"{Fore.MAGENTA}[NET]{Style.RESET_ALL} sending: {json.dumps(message)}")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}]  [DEBUG] NET ->  {json.dumps(message)}")
     data = json.dumps(message) + "\n"
     try:
         sock.sendall(data.encode("utf-8"))
     except Exception as e:
-        BackgroundLogger.error(f"send failed: {e}")
+        BackgroundLogger.error(f"Send failed: {e}")
         raise
 def parse_pool_url(url, use_tls):
     """
@@ -174,34 +177,6 @@ def parse_pool_url(url, use_tls):
         host = url
         port = 443 if use_tls else 10032
     return host, port
-def hashrate_reporter():
-    """Every 30s send hashrate info to pool"""
-    global hash_counter
-
-    while not shutdown_flag.is_set():
-        time.sleep(30)
-
-        with hash_counter_lock:
-            hashes = hash_counter
-            hash_counter = 0
-
-        hr = int(hashes / 30)
-
-        if not session_id:
-            continue
-
-        msg = {
-            "method": "hashrate",
-            "params": {
-                "id": session_id,
-                "hashrate": hr
-            }
-        }
-
-        try:
-            stratum_send(sock, msg)
-        except Exception as e:
-            BackgroundLogger.debug(f"Hashrate report failed: {e}")
 def create_pool_connection(host, port, use_tls, tls_insecure=False):
     """
     Create socket connection to mining pool
@@ -226,7 +201,7 @@ def create_pool_connection(host, port, use_tls, tls_insecure=False):
             return ssl_sock
         return sock
     except Exception as e:
-        BackgroundLogger.error(f"connection failed: {e}")
+        BackgroundLogger.error(f"Connection failed: {e}")
         sys.exit(1)
 def hex_to_bytes(hex_str):
     """Convert hexadecimal string to bytes"""
@@ -235,13 +210,6 @@ def bytes_to_hex(byte_data):
     """Convert bytes to hexadecimal string"""
     return byte_data.hex()
 def format_difficulty(diff):
-    """
-    Format difficulty value with appropriate units (k, M, G)
-    Args:
-        diff: Difficulty value as integer
-    Returns:
-        Formatted difficulty string with unit suffix
-    """
     if diff >= 1_000_000_000:
         return f"{diff/1_000_000_000:.2f}G"
     elif diff >= 1_000_000:
@@ -263,8 +231,8 @@ def calculate_monero_difficulty(target_hex):
         raise ValueError(f"Invalid difficulty length: {len(target_hex)} chars (expected 8)")
     difficulty = int(target_hex, 16)
     if args.debug and not args.background:
-        BackgroundLogger.debug(f"Raw hex: 0x{target_hex}")
-        BackgroundLogger.debug(f"Difficulty: {difficulty:,}")
+        print(f"[DEBUG-DIFFICULTY] Raw hex: 0x{target_hex}")
+        print(f"[DEBUG-DIFFICULTY] Difficulty: {difficulty:,}")
     return difficulty
 def set_new_job(job):
     """
@@ -294,17 +262,17 @@ def set_new_job(job):
     new_seed = job["seed_hash"]
     if current_seed_hash and new_seed != current_seed_hash:
         if not args.background:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}]  [WRN] Seed hash changed! Re-initializing RandomX VMs...")
+            print("[WRN] Seed hash changed! Re-initializing RandomX VMs...")
         seed_changed_flag.set()
     current_seed_hash = new_seed
     jobs_queued = 0
-    for _ in range(args.threads):
+    for _ in range(args.threads):  # ← Put N times!
         try:
             job_queue.put_nowait(job_data)
             jobs_queued += 1
         except queue.Full:
             if args.debug:
-                BackgroundLogger.debug(f"Job queue full after {jobs_queued} jobs")
+                print(f"[DEBUG] Job queue full after {jobs_queued} jobs")
             break
     if jobs_queued == 0:
         return False
@@ -335,9 +303,9 @@ def convert_compact_target_to_bytes(target_hex):
     with target_cache_lock:
         target_cache[target_hex] = target_big_endian
     if args.debug and not args.background:
-        BackgroundLogger.debug(f"Difficulty from pool: {difficulty:,}")
-        BackgroundLogger.debug(f"Calculated target: 0x{target_64bit:016x}")
-        BackgroundLogger.debug(f"For mining: hash must be < 0x{target_64bit:016x}")
+        print(f"[DEBUG-TARGET-CONV] Difficulty from pool: {difficulty:,}")
+        print(f"[DEBUG-TARGET-CONV] Calculated target: 0x{target_64bit:016x}")
+        print(f"[DEBUG-TARGET-CONV] For mining: hash must be < 0x{target_64bit:016x}")
     return target_big_endian
 def update_stats(hashes=0, accepted=0, rejected=0):
     """
@@ -356,7 +324,6 @@ def update_stats(hashes=0, accepted=0, rejected=0):
         if rejected > 0:
             stats["rejected"] += rejected
 def hashrate_sampler():
-    """Periodically sample hashrate for statistics"""
     last_hash = 0
     last_time = time.time()
     while not shutdown_flag.is_set():
@@ -375,7 +342,6 @@ def hashrate_sampler():
         last_hash = now_hash
         last_time = now_time
 def print_stats():
-    """Print current mining statistics"""
     if args.background or shutdown_flag.is_set():
         return
     now = time.time()
@@ -403,7 +369,7 @@ def print_stats():
             return f"{h/1_000:.2f} kH/s"
         else:
             return f"{h:.2f} H/s"
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]{Fore.BLUE}  [APP] {Style.RESET_ALL}speed now: {Fore.LIGHTYELLOW_EX}{format_hashrate(rate_now)}{Style.RESET_ALL} 10s: {Fore.LIGHTYELLOW_EX}{format_hashrate(rate_10s)}{Style.RESET_ALL} 60s: {Fore.LIGHTYELLOW_EX}{format_hashrate(rate_60s)}{Style.RESET_ALL}")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}]  [APP] speed now {format_hashrate(rate_now)} 10s {format_hashrate(rate_10s)} 60s {format_hashrate(rate_60s)}")
     total = accepted + rejected
     if total:
         ratio = accepted / total * 100
@@ -424,7 +390,7 @@ def shutdown_miner(sock=None):
         return
     shutdown_flag.set()
     if not args.background:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}]{Fore.BLUE}  [APP] {Style.RESET_ALL}shutting down...")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}]  [APP] shutting down...")
     for thread in mining_threads:
         try:
             thread.join(timeout=2)
@@ -470,7 +436,7 @@ def optimize_mining_environment():
         kernel32 = ctypes.windll.kernel32
         kernel32.SetErrorMode(0x0001 | 0x0002 | 0x0004)
         if not args.background:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}]{Fore.CYAN}  [INF] {Style.RESET_ALL}environment optimized for mining successfully")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}]  [INF] Environment optimized for mining")
     except Exception as e:
         if args.debug:
             BackgroundLogger.debug(f"Optimization error: {e}")
@@ -482,7 +448,7 @@ def reconnect_to_pool():
     """
     global session_id, pool_socket, pool_host, pool_port
     if not args.background:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}]{Fore.MAGENTA}  [NET] {Style.RESET_ALL}attempting to reconnect...")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}]  [NET] attempting to reconnect...")
     try:
         try:
             pool_socket.close()
@@ -495,25 +461,659 @@ def reconnect_to_pool():
             "params": {
                 "login": args.user,
                 "pass": args.password,
-                "hashrate": args.threads * 150,
-                "agent": "XMRig/6.20.0 (Windows NT 10.0; Win64; x64)"
+                "agent": "XMRig/6.12.1 (Windows NT 10.0; Win64; x64) msvc/2019"
             }
         }
+        stratum_send(new_socket, login_msg)
+        response = None
+        timeout = time.time() + 10
+        while time.time() < timeout and not shutdown_flag.is_set():
+            try:
+                msg = net_queue.get(timeout=1)
+                if msg.get("id") == 1:
+                    response = msg
+                    break
+            except queue.Empty:
+                continue
+        if not response or response.get("error"):
+            error_msg = response.get("error") if response else "timeout"
+            BackgroundLogger.error(f"Reconnect failed: {error_msg}")
+            return None
+        result_data = response.get("result", {})
+        if isinstance(result_data, dict):
+            new_session_id = result_data.get("id")
+        else:
+            new_session_id = str(result_data) if result_data else None
+        if not new_session_id:
+            BackgroundLogger.error("No session id in reconnect response")
+            return None
+        session_id = new_session_id
+        if not args.background:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}]  [NET] reconnected, new session: {session_id}")
+        return new_socket
+    except Exception as e:
+        BackgroundLogger.error(f"Reconnect error: {e}")
+        return None
+def stratum_recv_loop(sock):
+    """
+    Receive loop for stratum protocol messages
+    Args:
+        sock: Socket connection to pool
+    """
+    buffer = b""
+    sock.settimeout(2)
+    while not shutdown_flag.is_set():
         try:
-            stratum_send(new_socket, login_msg)
-        
-            response = None
-            timeout = time.time() + 10
-        
-            while time.time() < timeout and not shutdown_flag.is_set():
+            data = sock.recv(4096)
+            if not data:
+                BackgroundLogger.error("Pool closed connection")
+                shutdown_flag.set()
+                break
+            buffer += data
+            while b"\n" in buffer:
+                line, buffer = buffer.split(b"\n", 1)
+                try:
+                    msg = json.loads(line.decode())
+                    if args.debug and not args.background:
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}]  [DEBUG] NET   {json.dumps(msg)}")
+                    msg_id = msg.get("id")
+                    if msg_id is not None and msg_id >= 1000:
+                        submit_response_queue.put(msg)
+                    else:
+                        net_queue.put(msg)
+                except json.JSONDecodeError:
+                    continue
+        except socket.timeout:
+            if shutdown_flag.is_set():
+                BackgroundLogger.debug("Socket timeout, shutdown detected")
+                break
+            continue
+        except ConnectionError as e:
+            BackgroundLogger.error(f"Connection error: {e}")
+            shutdown_flag.set()
+            break
+        except Exception as e:
+            BackgroundLogger.error(f"Receive failed: {e}")
+            shutdown_flag.set()
+            break
+def mining_worker(worker_id, flags, initial_seed):
+    global current_batch_size, hash_counter
+
+    try:
+        SetThreadPriority = ctypes.windll.kernel32.SetThreadPriority
+        GetCurrentThread = ctypes.windll.kernel32.GetCurrentThread
+        SetThreadPriority(GetCurrentThread(), 2)
+    except Exception:
+        pass
+
+    vm = RandomXVM(flags, initial_seed, worker_id)
+    if not vm.wait_until_ready(args.init_timeout):
+        print(f"[ERROR] Worker {worker_id} VM init timeout")
+        return
+
+    current_job_data = None
+    current_target_int = None
+    current_blob_template = None
+    current_nonce_offset = 39
+    hash_output_buffer = ffi.new("char[32]")
+
+    while not shutdown_flag.is_set():
+
+        # ===== SEED CHANGE =====
+        if seed_changed_flag.is_set():
+            vm.destroy()
+            vm = RandomXVM(flags, current_seed_hash, worker_id)
+            if not vm.wait_until_ready(args.init_timeout):
+                return
+            seed_changed_flag.clear()
+            current_job_data = None
+            continue
+
+        # ===== GET JOB =====
+        try:
+            new_job = job_queue.get_nowait()
+        except queue.Empty:
+            new_job = None
+
+        if new_job and (current_job_data is None or new_job["job_id"] != current_job_data["job_id"]):
+            current_job_data = new_job
+            current_blob_template = bytearray(hex_to_bytes(new_job["blob"]))
+            current_nonce_offset = new_job.get("nonce_offset", 39)
+
+            target_bytes = convert_compact_target_to_bytes(new_job["target"])
+            current_target_int = int.from_bytes(target_bytes, "big")
+
+        if current_job_data is None:
+            time.sleep(0.001)
+            continue
+
+        # =========================
+        # MINING BATCH
+        # =========================
+
+        with batch_lock:
+            batch_size = max(current_batch_size, BATCH_MIN)
+
+        batch_start = time.time()
+        local_count = 0
+
+        for i in range(batch_size):
+            if shutdown_flag.is_set():
+                break
+
+            nonce = vm.get_next_nonce()
+            current_blob_template[current_nonce_offset:current_nonce_offset + 4] = struct.pack("<I", nonce)
+
+            try:
+                randomx.randomx_calculate_hash(
+                    vm.vm,
+                    bytes(current_blob_template),
+                    len(current_blob_template),
+                    hash_output_buffer
+                )
+            except Exception:
+                continue
+
+            hash_bytes = bytes(ffi.buffer(hash_output_buffer, 32))
+            hash_int = int.from_bytes(hash_bytes[0:8], "little")
+
+            # realtime counter (smooth)
+            local_count += 1
+            if local_count >= 50:
+                with hash_counter_lock:
+                    hash_counter += local_count
+                local_count = 0
+
+            # submit share
+            if hash_int < current_target_int and meets_submit_throttle(hash_int, args.submit_throttle):
+                try:
+                    submit_queue.put_nowait({
+                        "job_id": current_job_data["job_id"],
+                        "nonce": struct.pack("<I", nonce).hex(),
+                        "result": bytes_to_hex(hash_bytes),
+                        "worker_id": worker_id,
+                        "timestamp": time.time()
+                    })
+                except queue.Full:
+                    pass
+
+        # flush remainder
+        if local_count:
+            with hash_counter_lock:
+                hash_counter += local_count
+
+        # =========================
+        # ADAPTIVE BATCH (STABLE)
+        # =========================
+
+        batch_time = time.time() - batch_start
+
+        if batch_time > 0:
+            scale = TARGET_BATCH_TIME / batch_time
+            scale = max(0.7, min(1.4, scale))   # smooth like xmrig
+
+            new_batch = int(batch_size * scale)
+            new_batch = max(BATCH_MIN, min(new_batch, BATCH_MAX))
+
+            with batch_lock:
+                current_batch_size = new_batch
+
+            if args.debug and worker_id == 0 and not args.background:
+                print(
+                    f"[{datetime.now().strftime('%H:%M:%S')}] "
+                    f"[BATCH] {batch_size} → {new_batch} ({batch_time:.3f}s)"
+                )
+
+    vm.destroy()
+    if not args.background:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}]  [CPU] worker {worker_id}: stopped")
+def job_queue_monitor():
+    """Monitor and maintain adequate job supply in job queue"""
+    while not shutdown_flag.is_set():
+        current_size = job_queue.qsize()
+        if current_size < args.threads and latest_job is not None:
+            needed = args.threads - current_size
+            with job_lock:
+                current_version = job_version
+            for _ in range(needed):
+                try:
+                    job_queue.put_nowait({**latest_job, "version": current_version})
+                except queue.Full:
+                    break
+        time.sleep(0.05)
+def submit_worker(sock):
+    """
+    Worker thread for submitting shares to pool
+    Args:
+        sock: Socket connection to pool
+    """
+    global submit_id_counter, session_id, pool_socket
+    while not shutdown_flag.is_set():
+        try:
+            submit_data = submit_queue.get(timeout=1)
+        except queue.Empty:
+            continue
+        with current_valid_job_lock:
+            if submit_data["job_id"] not in [current_valid_job_id, previous_valid_job_id]:
+                update_stats(rejected=1)
+                if args.debug:
+                    print(f"[STALE] Dropping outdated job {submit_data['job_id'][:8]}...")
+                continue
+        if session_id is None:
+            continue
+        submit_id_counter += 1
+        msg_id = 1000 + submit_id_counter
+        submit_msg = {
+            "id": msg_id,
+            "method": "submit",
+            "params": {
+                "id": session_id,
+                "job_id": submit_data["job_id"],
+                "nonce": submit_data["nonce"],
+                "result": submit_data["result"]
+            }
+        }
+        with pending_submits_lock:
+            pending_submits[msg_id] = {
+                "time": time.time(),
+                "data": submit_data
+            }
+        if args.debug and not args.background:
+            age = time.time() - submit_data.get("timestamp", time.time())
+            print(f"[{datetime.now().strftime('%H:%M:%S')}]  [DEBUG] NET   SUBMIT: {submit_data['job_id'][:8]}... (age: {age:.2f}s)")
+        stratum_send(sock, submit_msg)
+        try:
+            response = submit_response_queue.get(timeout=SUBMIT_TIMEOUT)
+        except queue.Empty:
+            if args.debug and not args.background:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}]  [DEBUG-SUBMIT] No response for submit {msg_id} (timeout)")
+            continue
+        resp_id = response.get("id")
+        if response.get("error"):
+            error_code = response["error"].get("code")
+            error_msg = response["error"].get("message", "")
+            if error_code == -1 and "unauthenticated" in error_msg.lower():
+                if not args.background:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}]  [NET] session expired, reconnecting...")
+                new_sock = reconnect_to_pool()
+                if new_sock:
+                    pool_socket = new_sock
+                    sock = new_sock
+                with pending_submits_lock:
+                    pending_count_before_clear = len(pending_submits)
+                    pending_submits.clear()
+                submit_id_counter = 0
+                update_stats(rejected=1)
+                if args.debug and not args.background and pending_count_before_clear > 0:
+                    print(f"[DEBUG] Cleared {pending_count_before_clear} pending submits (unknown status)")
+                continue
+            else:
+                if not args.background:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}]  miner    share rejected: {error_msg}")
+                update_stats(rejected=1)
+                continue
+        with pending_submits_lock:
+            pending_submits.pop(resp_id, None)
+        update_stats(accepted=1)
+        if not args.background:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}]  miner    share accepted")
+def cleanup_pending_submits():
+    """Periodically remove stale entries from pending_submits"""
+    while not shutdown_flag.is_set():
+        shutdown_flag.wait(30)
+        if shutdown_flag.is_set():
+            break
+        now = time.time()
+        with pending_submits_lock:
+            stale = [msg_id for msg_id, data in pending_submits.items()
+                     if now - data["time"] > SUBMIT_TIMEOUT * 2]
+            for msg_id in stale:
+                del pending_submits[msg_id]
+            if stale and args.debug and not args.background:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}]  [CLEANUP] Removed {len(stale)} stale pending submits")
+def main():
+    """Main miner initialization and control loop"""
+    global session_id, latest_job, pool_socket, pool_host, pool_port
+    optimize_mining_environment()
+    if not args.background:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}]  [INF] Starting PY-RIG Miner")
+    try:
+        pool_host, pool_port = parse_pool_url(args.url, args.tls)
+        pool_socket = create_pool_connection(pool_host, pool_port, args.tls, args.tls_insecure)
+        pool_socket.settimeout(30)
+    except Exception as e:
+        BackgroundLogger.error(f"Connection failed: {e}")
+        sys.exit(1)
+    if not args.background:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}]  [NET] use pool {pool_host}:{pool_port}")
+    recv_thread = threading.Thread(target=stratum_recv_loop, args=(pool_socket,), daemon=True)
+    recv_thread.start()
+    try:
+        login_msg = {
+            "id": 1,
+            "method": "login",
+            "params": {
+                "login": args.user,
+                "pass": args.password,
+                "agent": "XMRig/6.12.1 (Windows NT 10.0; Win64; x64) msvc/2019"
+            }
+        }
+        stratum_send(pool_socket, login_msg)
+        response = None
+        timeout = time.time() + 10
+        while time.time() < timeout and not shutdown_flag.is_set():
+            try:
+                msg = net_queue.get(timeout=1)
+                if msg.get("id") == 1:
+                    response = msg
+                    break
+            except queue.Empty:
+                continue
+        if not response or response.get("error"):
+            error_msg = response.get("error") if response else "timeout"
+            BackgroundLogger.error(f"Login failed: {error_msg}")
+            sys.exit(1)
+        result_data = response.get("result", {})
+        if isinstance(result_data, dict):
+            session_id = result_data.get("id")
+        else:
+            session_id = str(result_data) if result_data else None
+        if not session_id:
+            session_id = response.get("id")
+        if not session_id:
+            BackgroundLogger.error("No session id received")
+            sys.exit(1)
+        if not args.background:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}]  [NET] use algo randomx")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}]  [NET] connected")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}]  [NET] session {session_id}")
+        if isinstance(result_data, dict) and "job" in result_data:
+            job = result_data["job"]
+        else:
+            job = None
+            job_timeout = time.time() + 10
+            while time.time() < job_timeout and not shutdown_flag.is_set():
                 try:
                     msg = net_queue.get(timeout=1)
-                    if msg.get("id") == 1:
-                        response = msg
+                    if msg.get("method") == "job":
+                        job = msg["params"]
                         break
                 except queue.Empty:
                     continue
-        
-            if not response or response.get("error"):
-                error_msg = response.get("error") if response else "timeout"
-              
+            if not job:
+                BackgroundLogger.error("No initial job")
+                sys.exit(1)
+        seed_hash = job["seed_hash"]
+        latest_job = job
+        if args.verbose and not args.background:
+            difficulty = calculate_monero_difficulty(job['target'])
+            print(f"[{datetime.now().strftime('%H:%M:%S')}]  [VERBOSE] net      initial job difficulty: {difficulty:,} (target: 0x{job['target']})")
+        set_new_job(job)
+    except Exception as e:
+        BackgroundLogger.error(f"Login failed: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+    available_flags = randomx.randomx_get_flags()
+    rx_flags = randomx.RANDOMX_FLAG_DEFAULT
+    if args.mode == "full":
+        rx_flags |= randomx.RANDOMX_FLAG_FULL_MEM
+    if available_flags & randomx.RANDOMX_FLAG_JIT:
+        rx_flags |= randomx.RANDOMX_FLAG_JIT
+    if available_flags & randomx.RANDOMX_FLAG_HARD_AES:
+        rx_flags |= randomx.RANDOMX_FLAG_HARD_AES
+    if available_flags & randomx.RANDOMX_FLAG_LARGE_PAGES:
+        rx_flags |= randomx.RANDOMX_FLAG_LARGE_PAGES
+    if not args.background:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}]  [CPU] use profile rx")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}]  [CPU] {args.threads} threads")
+    for i in range(args.threads):
+        thread = threading.Thread(target=mining_worker, args=(i, rx_flags, seed_hash), daemon=True)
+        thread.start()
+        mining_threads.append(thread)
+    queue_monitor = threading.Thread(target=job_queue_monitor, daemon=True)
+    queue_monitor.start()
+    submit_thread = threading.Thread(target=submit_worker, args=(pool_socket,), daemon=True)
+    submit_thread.start()
+    cleanup_thread = threading.Thread(target=cleanup_pending_submits, daemon=True)
+    cleanup_thread.start()
+    sampler_thread = threading.Thread(target=hashrate_sampler, daemon=True)
+    sampler_thread.start()
+    def stats_printer():
+        time.sleep(15)
+        while not shutdown_flag.is_set():
+            print_stats()
+            time.sleep(5)
+    if not args.background:
+        stats_thread = threading.Thread(target=stats_printer, daemon=True)
+        stats_thread.start()
+    if not args.background:
+        print(f"[{datetime.now().strftime('%H:%M:%S')}]  [APP] MINING STARTED")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}]  {'*' * 15}")
+    try:
+        while not shutdown_flag.is_set():
+            try:
+                message = net_queue.get(timeout=1)
+                if message.get("method") == "job":
+                    job = message["params"]
+                    latest_job = job
+                    set_new_job(job)
+                    if not args.background:
+                        difficulty = int(job["target"], 16)
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}]  [NET] new job from {pool_host}:{pool_port} difficulty: {format_difficulty(difficulty)}")
+                elif message.get("method") == "keepalived":
+                    stratum_send(pool_socket, {"id": None, "method": "keepalived"})
+            except queue.Empty:
+                time.sleep(0.01)
+                continue
+            except Exception as e:
+                BackgroundLogger.error(f"Network error: {e}")
+                break
+    except KeyboardInterrupt:
+        pass
+    finally:
+        shutdown_miner(pool_socket)
+    return pool_socket
+def find_dll(filename, search_dirs):
+    """
+    Search for DLL file in specified directories
+    Args:
+        filename: Name of DLL file to find
+        search_dirs: List of directories to search
+    Returns:
+        Full path to DLL or None if not found
+    """
+    for base_dir in search_dirs:
+        for root, dirs, files in os.walk(base_dir):
+            if filename in files:
+                return os.path.join(root, filename)
+    return None
+
+# Fungsi utama - cari pustaka .dll RandomX
+base_dir = os.path.dirname(__file__)
+candidate_dirs = [
+    os.path.join(base_dir, "build"),
+    os.path.join(base_dir, "build", "windows"),
+    os.path.join(base_dir, "build", "windows", "tevador"),
+    os.path.join(base_dir, "assets"),
+    base_dir
+]
+dll_path = find_dll("librandomx.dll", candidate_dirs)
+if not dll_path:
+    BackgroundLogger.error("RandomX library not found")
+    sys.exit(1)
+if not args.background:
+    print(f"[{datetime.now().strftime('%H:%M:%S')}]  [INF] Loading RandomX library from {dll_path}")
+
+# RandomX binding file CFFI kemudian load pustaka
+ffi = FFI()
+ffi.cdef("""
+    typedef enum {
+        RANDOMX_FLAG_DEFAULT = 0,
+        RANDOMX_FLAG_LARGE_PAGES = 1,
+        RANDOMX_FLAG_HARD_AES = 2,
+        RANDOMX_FLAG_FULL_MEM = 4,
+        RANDOMX_FLAG_JIT = 8,
+        RANDOMX_FLAG_SECURE = 16
+    } randomx_flags;
+    typedef struct randomx_cache randomx_cache;
+    typedef struct randomx_dataset randomx_dataset;
+    typedef struct randomx_vm randomx_vm;
+    randomx_flags randomx_get_flags(void);
+    randomx_cache* randomx_alloc_cache(randomx_flags flags);
+    void randomx_init_cache(randomx_cache* cache, const void* key, size_t keySize);
+    void randomx_release_cache(randomx_cache* cache);
+    randomx_dataset* randomx_alloc_dataset(randomx_flags flags);
+    unsigned long randomx_dataset_item_count(void);
+    void randomx_init_dataset(randomx_dataset* dataset, randomx_cache* cache, unsigned long startItem, unsigned long itemCount);
+    void randomx_release_dataset(randomx_dataset* dataset);
+    randomx_vm* randomx_create_vm(randomx_flags flags, randomx_cache* cache, randomx_dataset* dataset);
+    void randomx_destroy_vm(randomx_vm* machine);
+    void randomx_calculate_hash(randomx_vm* machine, const void* input, size_t inputSize, void* output);
+""")
+try:
+    randomx = ffi.dlopen(dll_path)
+except Exception as e:
+    BackgroundLogger.error(f"Failed to load RandomX: {e}")
+    sys.exit(1)
+if not args.background:
+    print(f"[{datetime.now().strftime('%H:%M:%S')}]  [INF] RandomX library loaded successfully")
+
+# Class fungsi RandomXVM
+class RandomXVM:
+    """RandomX virtual machine wrapper with lifecycle management"""
+    def __init__(self, flags, seed_hex, worker_id=0):
+        """
+        Initialize RandomX VM
+        Args:
+            flags: RandomX configuration flags
+            seed_hex: Seed for cache initialization
+            worker_id: Worker identifier for logging
+        """
+        global global_randomx_cache, global_randomx_dataset, global_seed_hash
+        self.flags = flags
+        self.seed = hex_to_bytes(seed_hex)
+        self.worker_id = worker_id
+        self.initialized = False
+        self.cache = None
+        self.dataset = None
+        self.vm = None
+        self.worker_nonce_lock = threading.Lock()
+        self.worker_nonce = worker_id * 1000000  # Start dari nilai unik per worker
+        self.init_in_background()
+    def init_in_background(self):
+        """Initialize VM components with shared cache/dataset"""
+        def init_task():
+            global global_randomx_cache, global_randomx_dataset, global_seed_hash
+            try:
+                mode_str = "FULL" if self.flags & randomx.RANDOMX_FLAG_FULL_MEM else "LIGHT"
+                if not args.background:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}]  [CPU] worker {self.worker_id}: starting VM initialization ({mode_str} mode)")
+                start_time = time.time()
+                with global_randomx_lock:
+                    if global_randomx_cache is None or global_seed_hash != self.seed.hex():
+                        if global_randomx_cache is not None:
+                            if global_randomx_dataset is not None:
+                                randomx.randomx_release_dataset(global_randomx_dataset)
+                                global_randomx_dataset = None
+                            randomx.randomx_release_cache(global_randomx_cache)
+                        if not args.background:
+                            print(f"[{datetime.now().strftime('%H:%M:%S')}]  [CPU] worker {self.worker_id}: creating SHARED cache...")
+                        global_randomx_cache = randomx.randomx_alloc_cache(self.flags)
+                        randomx.randomx_init_cache(global_randomx_cache, self.seed, len(self.seed))
+                        global_seed_hash = self.seed.hex()
+                        if not args.background:
+                            cache_time = time.time() - start_time
+                            print(f"[{datetime.now().strftime('%H:%M:%S')}]  [CPU] shared cache initialized ({cache_time:.1f}s)")
+                    self.cache = global_randomx_cache
+                    if self.flags & randomx.RANDOMX_FLAG_FULL_MEM:
+                        if global_randomx_dataset is None:
+                            if not args.background:
+                                print(f"[{datetime.now().strftime('%H:%M:%S')}]  [CPU] worker {self.worker_id}: allocating SHARED 2GB dataset...")
+                            global_randomx_dataset = randomx.randomx_alloc_dataset(self.flags)
+                            if not global_randomx_dataset:
+                                print(f"[{datetime.now().strftime('%H:%M:%S')}]  [WARN] Dataset allocation failed, falling back to LIGHT mode")
+                                self.flags &= ~randomx.RANDOMX_FLAG_FULL_MEM
+                                self.dataset = ffi.NULL
+                            else:
+                                item_count = randomx.randomx_dataset_item_count()
+                                if not args.background:
+                                    print(f"[{datetime.now().strftime('%H:%M:%S')}]  [CPU] initializing dataset ({item_count:,} items)...")
+                                ds_start = time.time()
+                                randomx.randomx_init_dataset(global_randomx_dataset, global_randomx_cache, 0, item_count)
+                                ds_time = time.time() - ds_start
+                                if not args.background:
+                                    if ds_time < 3:
+                                        print(f"[{datetime.now().strftime('%H:%M:%S')}]  [INF] Huge pages active ({ds_time:.1f}s dataset init)")
+                                    elif ds_time < 10:
+                                        print(f"[{datetime.now().strftime('%H:%M:%S')}]  [INF] Normal memory ({ds_time:.1f}s dataset init)")
+                                    else:
+                                        print(f"[{datetime.now().strftime('%H:%M:%S')}]  [WARN] Slow memory/no huge pages ({ds_time:.1f}s init)")
+                                self.dataset = global_randomx_dataset
+                        else:
+                            self.dataset = global_randomx_dataset
+                            if not args.background:
+                                print(f"[{datetime.now().strftime('%H:%M:%S')}]  [CPU] worker {self.worker_id}: using shared dataset (already initialized)")
+                    else:
+                        self.dataset = ffi.NULL
+                self.vm = randomx.randomx_create_vm(self.flags, self.cache, self.dataset)
+                if not self.vm:
+                    raise RuntimeError("VM creation failed")
+                self.initialized = True
+                init_time = time.time() - start_time
+                if not args.background:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}]  [CPU] worker {self.worker_id}: ready ({init_time:.1f}s total)")
+            except Exception as e:
+                BackgroundLogger.error(f"Worker {self.worker_id} init failed: {e}")
+                import traceback
+                traceback.print_exc()
+                self.initialized = False
+        thread = threading.Thread(target=init_task, daemon=True)
+        thread.start()
+    def wait_until_ready(self, timeout=None):
+        """
+        Wait for VM initialization to complete
+        Args:
+            timeout: Maximum wait time in seconds
+        Returns:
+            Boolean indicating if VM is ready
+        """
+        start_time = time.time()
+        while not self.initialized and not shutdown_flag.is_set():
+            elapsed = time.time() - start_time
+            if timeout and elapsed >= timeout:
+                return False
+            time.sleep(0.1)
+        return self.initialized
+    def get_next_nonce(self):
+        """Get next nonce value for this worker with thread safety"""
+        with self.worker_nonce_lock:
+            nonce = self.worker_nonce
+            self.worker_nonce = (self.worker_nonce + 1) & 0xFFFFFFFF
+            return nonce
+    def destroy(self):
+        """Clean up VM resources - cache & dataset are SHARED, don't release!"""
+        try:
+            if self.vm:
+                randomx.randomx_destroy_vm(self.vm)
+                self.vm = None
+            self.cache = None
+            self.dataset = None
+        except Exception as e:
+            if args.debug:
+                BackgroundLogger.debug(f"VM destroy error: {e}")
+        self.initialized = False
+
+# Pintu masuk utama (entry point)
+if __name__ == "__main__":
+    pool_socket = None
+    try:
+        pool_socket = main()
+    except KeyboardInterrupt:
+        if pool_socket:
+            shutdown_miner(pool_socket)
+    except Exception as e:
+        BackgroundLogger.error(f"Fatal error: {e}")
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
