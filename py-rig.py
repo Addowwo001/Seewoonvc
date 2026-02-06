@@ -175,30 +175,33 @@ def parse_pool_url(url, use_tls):
         port = 443 if use_tls else 10032
     return host, port
 def hashrate_reporter():
-    """Send hashreport every 30s to mining pool"""
+    """Every 30s send hashrate info to pool"""
     global hash_counter
-    time.sleep(10)
-    last_reported = 0
+
     while not shutdown_flag.is_set():
         time.sleep(30)
+
         with hash_counter_lock:
             hashes = hash_counter
-        delta = hashes - last_reported
-        last_reported = hashes
-        hr = int(delta / 30)
-        if session_id:
-            msg = {
-                "method": "hashrate",
-                "params": {
-                    "id": session_id,
-                    "hashrate": hr
-                }
+            hash_counter = 0
+
+        hr = int(hashes / 30)
+
+        if not session_id:
+            continue
+
+        msg = {
+            "method": "hashrate",
+            "params": {
+                "id": session_id,
+                "hashrate": hr
             }
-            try:
-                stratum_send(msg)
-            except Exception as e:
-                if args.debug:
-                    print(f"[DEBUG] hashrate send failed: {e}")
+        }
+
+        try:
+            stratum_send(sock, msg)
+        except Exception as e:
+            BackgroundLogger.debug(f"Hashrate report failed: {e}")
 def create_pool_connection(host, port, use_tls, tls_insecure=False):
     """
     Create socket connection to mining pool
@@ -511,4 +514,6 @@ def reconnect_to_pool():
                 continue
         
         if not response or response.get("error"):
-            error_msg = response.get
+            error_msg = response.get("error") if response else "timeout"
+            BackgroundLogger.error(f"Reconnect failed: {error_msg}")
+          
