@@ -67,41 +67,84 @@ previous_valid_job_id = None
 current_valid_job_lock = threading.Lock()
 
 # Argument Parser
-parser = argparse.ArgumentParser(description="PYRIG (V.4.0) - Monero CPU Miner", formatter_class=argparse.RawDescriptionHelpFormatter)
-parser.add_argument("-o", "--url", dest="url",
+parser = argparse.ArgumentParser(description="PYRIG (V.4.0) - CPU Miner", formatter_class=argparse.ArgumentDefaultsHelpFormatter, epilog="Example: python pyrig.py -o gulf.moneroocean.stream:10128 -u <wallet> -p x --mode full --threads 4")
+# Pool connection options
+group_pool = parser.add_argument_group("Pool connection")
+group_pool.add_argument("-o", "--url", dest="url", metavar="LINK",
     default="gulf.moneroocean.stream:10128",
     help="Pool URL in format host:port (stratum+tcp:// prefix optional)")
-parser.add_argument("-u", "--user", dest="user",
+group_pool.add_argument("-u", "--user", dest="user", metavar="USER",
     default="43jBxAR5zV4HvJLpMzECjt6QLs3zEhrhfKqxaRVGfY2f614Do1NbFgZekjtdE9fDRw6R4fP2q2N2i7427bsLTSxdCGFVfmr",
     help="Wallet address and optional worker name for pool authentication")
-parser.add_argument("-p", "--password", dest="password",
+group_pool.add_argument("-p", "--pass", dest="password", metavar="PASS",
     default="x",
-    help="Password for pool authentication (default: 'x')")
-parser.add_argument("--tls", action="store_true", dest="tls",
+    help="Password for pool authentication")
+# TLS options
+group_tls = parser.add_argument_group("TLS/SSL options")
+group_tls.add_argument("--tls", action="store_true", dest="tls",
     help="Enable TLS/SSL encryption for pool connection (default)")
-parser.add_argument("--no-tls", action="store_false", dest="tls",
+group_tls.add_argument("--no-tls", action="store_false", dest="tls",
     help="Disable TLS/SSL encryption for pool connection")
-parser.add_argument("--tls-insecure", action="store_true",
+group_tls.add_argument("--tls-insecure", action="store_true",
     help="Disable TLS certificate verification (use with caution)")
-parser.add_argument("--mode", dest="mode", choices=["full", "light"],
+# Mining options
+group_mining = parser.add_argument_group("Mining options")
+group_mining.add_argument("-t", "--threads", dest="threads", type=int, metavar="N",
+    default=max(1, os.cpu_count() - 1),
+    help="Number of mining threads")
+group_mining.add_argument("--mode", dest="mode", choices=["full", "light"], metavar="(FULL/LIGHT)",
     default="full",
     help="RandomX mining mode: 'full' for 2GB dataset or 'light' for cache-only")
-parser.add_argument("-t", "--threads", dest="threads", type=int,
-    default=f"{max(1, os.cpu_count() - 1)}",
-    help="Number of mining threads (default: CPU cores - 1)")
-parser.add_argument("--debug", action="store_true",
-    help="Enable debug logging for troubleshooting")
-parser.add_argument("--verbose", action="store_true",
-    help="Enable verbose logging with detailed mining information")
-parser.add_argument("--init-timeout", dest="init_timeout", type=int,
+group_mining.add_argument("--init-timeout", dest="init_timeout", type=int, metavar="SEC",
     default=120,
     help="Timeout in seconds for RandomX VM initialization")
-parser.add_argument("--background", action="store_true",
-    help="Run miner in background mode with minimal console output")
-parser.add_argument("--submit-throttle", dest="submit_throttle", type=int,
+group_mining.add_argument("--submit-throttle", dest="submit_throttle", type=int, metavar="VAL",
     default=None,
     help="Maximum difficulty threshold for share submission to reduce network load")
+# Logging options
+group_log = parser.add_argument_group("Logging options")
+group_log.add_argument("--debug", action="store_true",
+    help="Enable debug logging for troubleshooting")
+group_log.add_argument("--verbose", action="store_true",
+    help="Enable verbose logging with detailed mining information")
+group_log.add_argument("--background", action="store_true",
+    help="Run miner in background mode with minimal console output")
 args = parser.parse_args()
+#parser = argparse.ArgumentParser(description="PYRIG (V.4.0) - Monero CPU Miner", formatter_class=argparse.RawDescriptionHelpFormatter)
+#parser.add_argument("-o", "--url", dest="url",
+    #default="gulf.moneroocean.stream:10128",
+    #help="Pool URL in format host:port (stratum+tcp:// prefix optional)")
+#parser.add_argument("-u", "--user", dest="user",
+    #default="43jBxAR5zV4HvJLpMzECjt6QLs3zEhrhfKqxaRVGfY2f614Do1NbFgZekjtdE9fDRw6R4fP2q2N2i7427bsLTSxdCGFVfmr",
+    #help="Wallet address and optional worker name for pool authentication")
+#parser.add_argument("-p", "--password", dest="password",
+    #default="x",
+    #help="Password for pool authentication (default: 'x')")
+#parser.add_argument("--tls", action="store_true", dest="tls",
+    #help="Enable TLS/SSL encryption for pool connection (default)")
+#parser.add_argument("--no-tls", action="store_false", dest="tls",
+    #help="Disable TLS/SSL encryption for pool connection")
+#parser.add_argument("--tls-insecure", action="store_true",
+    #help="Disable TLS certificate verification (use with caution)")
+#parser.add_argument("--mode", dest="mode", choices=["full", "light"],
+    #default="full",
+    #help="RandomX mining mode: 'full' for 2GB dataset or 'light' for cache-only")
+#parser.add_argument("-t", "--threads", dest="threads", type=int,
+    #default=f"{max(1, os.cpu_count() - 1)}",
+    #help="Number of mining threads (default: CPU cores - 1)")
+#parser.add_argument("--debug", action="store_true",
+    #help="Enable debug logging for troubleshooting")
+#parser.add_argument("--verbose", action="store_true",
+    #help="Enable verbose logging with detailed mining information")
+#parser.add_argument("--init-timeout", dest="init_timeout", type=int,
+    #default=120,
+    #help="Timeout in seconds for RandomX VM initialization")
+#parser.add_argument("--background", action="store_true",
+    #help="Run miner in background mode with minimal console output")
+#parser.add_argument("--submit-throttle", dest="submit_throttle", type=int,
+    #default=None,
+    #help="Maximum difficulty threshold for share submission to reduce network load")
+#args = parser.parse_args()
 
 # Class functions for background logger
 class BackgroundLogger:
@@ -386,16 +429,12 @@ def print_stats():
     total = accepted + rejected
     if total:
         ratio = accepted / total * 100
-        print(
-            f"[{datetime.now().strftime('%H:%M:%S')}]      "
-            f"accepted {accepted}/{total} ({ratio:.1f}%) "
-            f"rejected {rejected}/{total}"
-        )
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] {Back.BLUE}[APP]{Style.RESET_ALL} accepted: {Fore.GREEN}{accepted}/{total}{Style.RESET_ALL} rejected: {Fore.RED}{rejected}/{total}{Style.RESET_ALL} ({ratio:.1f}%)")
     if accepted:
         ago = int(now - last_share_time)
         unit = "s" if ago < 60 else "m" if ago < 3600 else "h"
         value = ago if unit == "s" else ago // 60 if unit == "m" else ago // 3600
-        print(f"[{datetime.now().strftime('%H:%M:%S')}]      last share {value}{unit} ago")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}] {Back.BLUE}[APP]{Style.RESET_ALL} last share: {value}{unit} ago")
 
 def shutdown_miner(sock=None):
     """Shutdown miner and cleanup resources"""
@@ -717,11 +756,13 @@ def submit_worker(sock):
                 BackgroundLogger.debug(f"No response for submit {msg_id} (timeout)")
             continue
         resp_id = response.get("id")
+        with pending_submits_lock:
+            pending_submits.pop(resp_id, None)
         # FINAL authority: result OK
         if response.get("result", {}).get("status") == "OK":
             update_stats(accepted=1)
             if not args.background:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}]  miner    share accepted")
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] {Back.BLUE}[APP]{Style.RESET_ALL} {Fore.GREEN}share accepted{Style.RESET_ALL}")
             continue
         # Handle error
         if response.get("error"):
@@ -735,11 +776,7 @@ def submit_worker(sock):
             if not args.background:
                 print(f"[{datetime.now().strftime('%H:%M:%S')}]  miner    share rejected: {err_msg}")
             continue
-        with pending_submits_lock:
-            pending_submits.pop(resp_id, None)
-        update_stats(accepted=1)
-        if not args.background:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}]  miner    share accepted")
+        continue
 
 def cleanup_pending_submits():
     """Periodically remove stale entries from pending_submits"""
