@@ -1040,7 +1040,8 @@ class RandomXVM:
                                 global_randomx_dataset = None
                             randomx.randomx_release_cache(global_randomx_cache)
                         if not args.background:
-                            print(f"[{datetime.now().strftime('%H:%M:%S')}]  [CPU] worker {self.worker_id}: creating SHARED cache...")
+                            with stats_lock:
+                                print(f"[{datetime.now().strftime('%H:%M:%S')}]  [CPU] worker {self.worker_id}: creating SHARED cache...")
                         global_randomx_cache = randomx.randomx_alloc_cache(self.flags)
                         randomx.randomx_init_cache(global_randomx_cache, self.seed, len(self.seed))
                         global_seed_hash = self.seed.hex()
