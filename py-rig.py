@@ -30,7 +30,6 @@ global_seed_hash = None
 BATCH_MIN = 100
 SUBMIT_TIMEOUT = 15
 BATCH_MAX = 5000
-batch = 32
 TARGET_BATCH_TIME = 0.2
 last_batch_reset = time.time()
 BATCH_RESET_INTERVAL = 300
@@ -636,22 +635,20 @@ def mining_worker(worker_id, flags, initial_seed):
             current_job_data = new_job
             current_blob_template = bytearray(hex_to_bytes(new_job["blob"]))
             current_nonce_offset = new_job.get("nonce_offset", 39)
-            current_target_int = struct.unpack("<I", bytes.fromhex(new_job["target"]))[0]
+            target_bytes = convert_compact_target_to_bytes(new_job["target"])
+            current_target_int = int.from_bytes(target_bytes, "big")
         if current_job_data is None:
             time.sleep(0.001)
             continue
         with batch_lock:
             batch_size = max(current_batch_size, BATCH_MIN)
+        batch_start = time.time()
         local_count = 0
-        base_nonce = vm.get_next_nonce()
-        start = time.perf_counter()
         for i in range(batch_size):
             if shutdown_flag.is_set():
                 break
-            nonce = base_nonce + i
-            current_blob_template[
-                current_nonce_offset:current_nonce_offset + 4
-            ] = struct.pack("<I", nonce)
+            nonce = vm.get_next_nonce()
+            current_blob_template[current_nonce_offset:current_nonce_offset + 4] = struct.pack("<I", nonce)
             try:
                 randomx.randomx_calculate_hash(
                     vm.vm,
@@ -679,11 +676,10 @@ def mining_worker(worker_id, flags, initial_seed):
                     })
                 except queue.Full:
                     pass
-        vm.advance_nonce(batch_size)
         if local_count:
             with hash_counter_lock:
                 hash_counter += local_count
-        batch_time = time.perf_counter() - start
+        batch_time = time.time() - batch_start
         if batch_time > 0:
             scale = TARGET_BATCH_TIME / batch_time
             scale = max(0.7, min(1.4, scale))
@@ -692,7 +688,7 @@ def mining_worker(worker_id, flags, initial_seed):
             with batch_lock:
                 current_batch_size = new_batch
             if args.debug and worker_id == 0 and not args.background:
-                BackgroundLogger.debug(f"BATCH {batch_size} -> {new_batch} ({batch_time:.4f}s)")
+                BackgroundLogger.debug(f"BATCH {batch_size} -> {new_batch} ({batch_time:.3f}s)")
     vm.destroy()
     if not args.background:
         print(f"[{datetime.now().strftime('%H:%M:%S')}]  [CPU] worker {worker_id}: stopped")
