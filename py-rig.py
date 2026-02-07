@@ -429,12 +429,12 @@ def print_stats():
     total = accepted + rejected
     if total:
         ratio = accepted / total * 100
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] {Back.BLUE}[APP]{Style.RESET_ALL} accepted: {Fore.GREEN}{accepted}/{total}{Style.RESET_ALL} rejected: {Fore.RED}{rejected}/{total}{Style.RESET_ALL} ({ratio:.1f}%)")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.BLUE}[APP]{Style.RESET_ALL} accepted: {Fore.GREEN}{accepted}/{total}{Style.RESET_ALL} rejected: {Fore.RED}{rejected}/{total}{Style.RESET_ALL} ({ratio:.1f}%)")
     if accepted:
         ago = int(now - last_share_time)
         unit = "s" if ago < 60 else "m" if ago < 3600 else "h"
         value = ago if unit == "s" else ago // 60 if unit == "m" else ago // 3600
-        print(f"[{datetime.now().strftime('%H:%M:%S')}] {Back.BLUE}[APP]{Style.RESET_ALL} last share: {value}{unit} ago")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.BLUE}[APP]{Style.RESET_ALL} last share: {value}{unit} ago")
 
 def shutdown_miner(sock=None):
     """Shutdown miner and cleanup resources"""
@@ -762,7 +762,7 @@ def submit_worker(sock):
         if response.get("result", {}).get("status") == "OK":
             update_stats(accepted=1)
             if not args.background:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] {Back.BLUE}[APP]{Style.RESET_ALL} {Fore.GREEN}share accepted{Style.RESET_ALL}")
+                print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.BLUE}[APP]{Style.RESET_ALL} {Fore.GREEN}share accepted{Style.RESET_ALL}")
             continue
         # Handle error
         if response.get("error"):
@@ -1019,7 +1019,7 @@ class RandomXVM:
         self.dataset = None
         self.vm = None
         self.worker_nonce_lock = threading.Lock()
-        self.worker_nonce = worker_id * 1000000  # Start from unique value per worker
+        self.worker_nonce = worker_id * 1000000
         self.init_in_background()
     
     def init_in_background(self):
@@ -1029,7 +1029,8 @@ class RandomXVM:
             try:
                 mode_str = "FULL" if self.flags & randomx.RANDOMX_FLAG_FULL_MEM else "LIGHT"
                 if not args.background:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}]  [CPU] worker {self.worker_id}: starting VM initialization {Fore.LIGHTCYAN_EX}({mode_str} mode){Style.RESET_ALL}")
+                    with stats_lock:
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}]  [CPU] worker {self.worker_id}: starting VM initialization {Fore.LIGHTCYAN_EX}({mode_str} mode){Style.RESET_ALL}")
                 start_time = time.time()
                 with global_randomx_lock:
                     if global_randomx_cache is None or global_seed_hash != self.seed.hex():
@@ -1074,7 +1075,8 @@ class RandomXVM:
                         else:
                             self.dataset = global_randomx_dataset
                             if not args.background:
-                                print(f"[{datetime.now().strftime('%H:%M:%S')}]  [CPU] worker {self.worker_id}: using shared dataset (already initialized)")
+                                with stats_lock:
+                                    print(f"[{datetime.now().strftime('%H:%M:%S')}]  [CPU] worker {self.worker_id}: using shared dataset (already initialized)")
                     else:
                         self.dataset = ffi.NULL
                 self.vm = randomx.randomx_create_vm(self.flags, self.cache, self.dataset)
@@ -1083,7 +1085,8 @@ class RandomXVM:
                 self.initialized = True
                 init_time = time.time() - start_time
                 if not args.background:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}]  [CPU] worker {self.worker_id}: ready ({init_time:.1f}s total)")
+                    with stats_lock:
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}]  [CPU] worker {self.worker_id}: ready ({init_time:.1f}s total)")
             except Exception as e:
                 BackgroundLogger.error(f"Worker {self.worker_id} init failed: {e}")
                 import traceback
