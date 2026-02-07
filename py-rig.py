@@ -31,10 +31,7 @@ BATCH_MIN = 100
 SUBMIT_TIMEOUT = 15
 BATCH_MAX = 5000
 TARGET_BATCH_TIME = 0.2
-last_batch_reset = time.time()
-BATCH_RESET_INTERVAL = 300
 current_seed_hash = None
-batch_avg_time = TARGET_BATCH_TIME
 pool_socket = None
 pool_host = None
 pool_port = None
@@ -57,7 +54,6 @@ stats = {
     "hash_history": [],
     "last_stat_print": 0
 }
-job_version = 0
 job_lock = threading.Lock()
 session_id = None
 target_cache = {}
@@ -292,10 +288,7 @@ def set_new_job(job):
     Returns:
         Boolean indicating if job was successfully queued
     """
-    global job_version, current_valid_job_id, current_seed_hash
-    new_job_version = job_version + 1
-    with job_lock:
-        job_version = new_job_version
+    global current_valid_job_id, current_seed_hash
     with current_valid_job_lock:
         global previous_valid_job_id
         previous_valid_job_id = current_valid_job_id
@@ -306,8 +299,7 @@ def set_new_job(job):
         "target": job["target"],
         "seed_hash": job["seed_hash"],
         "nonce_offset": job.get("nonce_offset", 39),
-        "height": job.get("height", 1),
-        "version": new_job_version
+        "height": job.get("height", 1)
     }
     new_seed = job["seed_hash"]
     if current_seed_hash and new_seed != current_seed_hash:
