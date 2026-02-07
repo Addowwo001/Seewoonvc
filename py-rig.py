@@ -127,7 +127,7 @@ def display_startup_banner():
     if args.background:
         return
     print(f"[{datetime.now().strftime('%H:%M:%S')}]  * {Fore.GREEN}PYRIG (V.4.0){Style.RESET_ALL} / Python Interpreter {Fore.GREEN}(V.{sys.version.split()[0]}){Style.RESET_ALL}")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * Microsoft {platform.system()} {platform.release()} ({platform.node()}/{platform.version()})")
+    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * Microsoft {platform.system()}{platform.release()} ({platform.node()}/{platform.version()})")
     print(f"[{datetime.now().strftime('%H:%M:%S')}]  *")
     print(f"[{datetime.now().strftime('%H:%M:%S')}]  * ABOUT           : https://github.com/codeanli/pyrig")
     print(f"[{datetime.now().strftime('%H:%M:%S')}]  * DONATE          : USDT: 0x7FF1753ac9fb1fb2008f1328bd79d0d70B7D3831 (BSC)")
@@ -717,29 +717,24 @@ def submit_worker(sock):
                 BackgroundLogger.debug(f"No response for submit {msg_id} (timeout)")
             continue
         resp_id = response.get("id")
+        # FINAL authority: result OK
+        if response.get("result", {}).get("status") == "OK":
+            update_stats(accepted=1)
+            if not args.background:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}]  miner    share accepted")
+            continue
+        # Handle error
         if response.get("error"):
-            error_code = response["error"].get("code")
-            error_msg = response["error"].get("message", "")
-            if error_code == -1 and "unauthenticated" in error_msg.lower():
-                if not args.background:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.MAGENTA}[NET]{Style.RESET_ALL} session expired, reconnecting...")
-                new_sock = reconnect_to_pool()
-                if new_sock:
-                    pool_socket = new_sock
-                    sock = new_sock
-                with pending_submits_lock:
-                    pending_count_before_clear = len(pending_submits)
-                    pending_submits.clear()
-                submit_id_counter = 0
-                update_stats(rejected=1)
-                if args.debug and not args.background and pending_count_before_clear > 0:
-                    BackgroundLogger.debug(f"Cleared {pending_count_before_clear} pending submits (unknown status)")
+            err_msg = response["error"].get("message", "").lower()
+            # Soft reject → IGNORE
+            if "low difficulty" in err_msg:
+                # jangan hitung apa-apa
                 continue
-            else:
-                if not args.background:
-                    print(f"[{datetime.now().strftime('%H:%M:%S')}]  miner    share rejected: {error_msg}")
-                update_stats(rejected=1)
-                continue
+            # Hard reject
+            update_stats(rejected=1)
+            if not args.background:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}]  miner    share rejected: {err_msg}")
+            continue
         with pending_submits_lock:
             pending_submits.pop(resp_id, None)
         update_stats(accepted=1)
