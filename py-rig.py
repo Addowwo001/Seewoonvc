@@ -27,21 +27,23 @@ global_randomx_cache = None
 global_randomx_dataset = None
 global_randomx_lock = threading.Lock()
 global_seed_hash = None
-BATCH_MIN = 100
+# OPTIMIZED: Increased BATCH_MIN for better efficiency with 3 cores
+BATCH_MIN = 800
 SUBMIT_TIMEOUT = 15
-BATCH_MAX = 5000
-TARGET_BATCH_TIME = 0.2
-last_batch_reset = time.time()
-BATCH_RESET_INTERVAL = 300
+# OPTIMIZED: Increased BATCH_MAX for aggressive mining
+BATCH_MAX = 10000
+# OPTIMIZED: Reduced target batch time for higher throughput
+TARGET_BATCH_TIME = 0.12
 current_seed_hash = None
-batch_avg_time = TARGET_BATCH_TIME
 pool_socket = None
 pool_host = None
 pool_port = None
-current_batch_size = 1500
+# OPTIMIZED: Higher starting batch size for 3 cores aggressive mode
+current_batch_size = 4000
 batch_lock = threading.Lock()
-job_queue = queue.Queue(maxsize=500)
-submit_queue = queue.Queue(maxsize=1000)
+# OPTIMIZED: Reduced queue size to minimize memory overhead
+job_queue = queue.Queue(maxsize=100)
+submit_queue = queue.Queue(maxsize=500)
 net_queue = queue.Queue()
 submit_response_queue = queue.Queue()
 mining_threads = []
@@ -110,41 +112,6 @@ group_log.add_argument("--verbose", action="store_true",
 group_log.add_argument("--background", action="store_true",
     help="Run miner in background mode with minimal console output")
 args = parser.parse_args()
-#parser = argparse.ArgumentParser(description="PYRIG (V.4.0) - Monero CPU Miner", formatter_class=argparse.RawDescriptionHelpFormatter)
-#parser.add_argument("-o", "--url", dest="url",
-    #default="gulf.moneroocean.stream:10128",
-    #help="Pool URL in format host:port (stratum+tcp:// prefix optional)")
-#parser.add_argument("-u", "--user", dest="user",
-    #default="43jBxAR5zV4HvJLpMzECjt6QLs3zEhrhfKqxaRVGfY2f614Do1NbFgZekjtdE9fDRw6R4fP2q2N2i7427bsLTSxdCGFVfmr",
-    #help="Wallet address and optional worker name for pool authentication")
-#parser.add_argument("-p", "--password", dest="password",
-    #default="x",
-    #help="Password for pool authentication (default: 'x')")
-#parser.add_argument("--tls", action="store_true", dest="tls",
-    #help="Enable TLS/SSL encryption for pool connection (default)")
-#parser.add_argument("--no-tls", action="store_false", dest="tls",
-    #help="Disable TLS/SSL encryption for pool connection")
-#parser.add_argument("--tls-insecure", action="store_true",
-    #help="Disable TLS certificate verification (use with caution)")
-#parser.add_argument("--mode", dest="mode", choices=["full", "light"],
-    #default="full",
-    #help="RandomX mining mode: 'full' for 2GB dataset or 'light' for cache-only")
-#parser.add_argument("-t", "--threads", dest="threads", type=int,
-    #default=f"{max(1, os.cpu_count() - 1)}",
-    #help="Number of mining threads (default: CPU cores - 1)")
-#parser.add_argument("--debug", action="store_true",
-    #help="Enable debug logging for troubleshooting")
-#parser.add_argument("--verbose", action="store_true",
-    #help="Enable verbose logging with detailed mining information")
-#parser.add_argument("--init-timeout", dest="init_timeout", type=int,
-    #default=120,
-    #help="Timeout in seconds for RandomX VM initialization")
-#parser.add_argument("--background", action="store_true",
-    #help="Run miner in background mode with minimal console output")
-#parser.add_argument("--submit-throttle", dest="submit_throttle", type=int,
-    #default=None,
-    #help="Maximum difficulty threshold for share submission to reduce network load")
-#args = parser.parse_args()
 
 # Class functions for background logger
 class BackgroundLogger:
@@ -157,446 +124,356 @@ class BackgroundLogger:
     @staticmethod
     def error(message):
         """Log error message (always displayed)"""
-        print(f"[{datetime.now().strftime('%H:%M:%S')}]  [ERROR] {message}")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.RED}[ERR]{Style.RESET_ALL} {message}")
+    @staticmethod
+    def warning(message):
+        """Log warning message (always displayed unless in background mode)"""
+        if not args.background:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.YELLOW}[WRN]{Style.RESET_ALL} {message}")
+    @staticmethod
+    def info(message):
+        """Log informational message"""
+        if not args.background:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.BLUE}[INF]{Style.RESET_ALL} {message}")
 
-# Display program logo
-def shorten_wallet(addr, start=24, end=4):
-    """Shorten wallet address for display if too long"""
-    if len(addr) <= start + end:
-        return addr
-    return addr[:start] + "..." + addr[-end:]
-def display_startup_banner():
-    """Display miner startup banner with configuration summary"""
-    if args.background:
-        return
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * {Fore.GREEN}PYRIG (V.4.0){Style.RESET_ALL} / Python Interpreter {Fore.GREEN}(V.{sys.version.split()[0]}){Style.RESET_ALL}")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * Microsoft {platform.system()}{platform.release()} ({platform.node()}/{platform.version()})")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  *")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * ABOUT           : https://github.com/codeanli/pyrig")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * DONATE          : USDT: 0x7FF1753ac9fb1fb2008f1328bd79d0d70B7D3831 (BSC)")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  *")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * CONFIGURATION")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * POOL ADDRESS    : stratum+tcp://{args.url}")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * WALLET ADDRESS  : {shorten_wallet(args.user)}")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * RANDOMX MODE    : {Fore.GREEN}{args.mode}{Style.RESET_ALL} ('full' for 2GB dataset or 'light' for cache-only)")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * CPU THREADS     : {Fore.GREEN}{args.threads}T{Style.RESET_ALL} ({platform.processor()}, {psutil.cpu_count(logical=False)}C, {psutil.cpu_count(logical=True)}T)")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * TLS/SSL CONNECT : {Fore.GREEN}{args.tls}{Style.RESET_ALL} (TLS insecure mode {Fore.GREEN}{args.tls_insecure}{Style.RESET_ALL})")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * TIMEOUT INIT    : {args.init_timeout}s (RandomX init timeout default 120s)")
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  * THROTTLE SUBMIT : {args.submit_throttle}")
-display_startup_banner()
+# Utility functions for hex/byte conversion
+def hex_to_bytes(hex_str):
+    """Convert hexadecimal string to bytes"""
+    return bytes.fromhex(hex_str)
+def bytes_to_hex(b):
+    """Convert bytes to hexadecimal string"""
+    return b.hex()
 
-# Supporting program functions
-def stratum_send(sock, message):
+# Target conversion functions
+def convert_compact_target_to_bytes(compact_hex):
     """
-    Send JSON message to stratum pool server
+    Convert compact target format to 32-byte target
+    Args:
+        compact_hex: Compact target in hex format
+    Returns:
+        32-byte target representation
+    """
+    with target_cache_lock:
+        if compact_hex in target_cache:
+            return target_cache[compact_hex]
+    compact = int(compact_hex, 16)
+    size = compact >> 24
+    word = compact & 0x00FFFFFF
+    if size <= 3:
+        word >>= 8 * (3 - size)
+        target_int = word
+    else:
+        target_int = word << (8 * (size - 3))
+    target_bytes = target_int.to_bytes(32, byteorder='big')
+    with target_cache_lock:
+        target_cache[compact_hex] = target_bytes
+    return target_bytes
+
+def meets_submit_throttle(hash_int, throttle):
+    """
+    Check if hash meets submit throttle threshold
+    Args:
+        hash_int: Hash value as integer
+        throttle: Maximum difficulty threshold
+    Returns:
+        Boolean indicating if hash should be submitted
+    """
+    if throttle is None:
+        return True
+    hash_diff = (2**64 - 1) / hash_int if hash_int > 0 else float('inf')
+    return hash_diff >= throttle
+
+# Network communication functions
+def send_json_rpc(sock, method, params=None, msg_id=1):
+    """
+    Send JSON-RPC request to pool
     Args:
         sock: Socket connection to pool
-        message: Dictionary containing stratum protocol message
+        method: RPC method name
+        params: Method parameters
+        msg_id: Message identifier
     """
-    if args.debug and not args.background:
-        BackgroundLogger.debug(f"NET{json.dumps(message)}")
-    data = json.dumps(message) + "\n"
-    try:
-        sock.sendall(data.encode("utf-8"))
-    except Exception as e:
-        BackgroundLogger.error(f"Send failed: {e}")
-        raise
+    payload = {"jsonrpc": "2.0", "id": msg_id, "method": method}
+    if params is not None:
+        payload["params"] = params
+    message = json.dumps(payload) + "\n"
+    sock.sendall(message.encode('utf-8'))
+    BackgroundLogger.debug(f"SENT: {message.strip()}")
 
-def parse_pool_url(url, use_tls):
+def receive_json_rpc(sock):
     """
-    Parse pool URL into host and port components
+    Receive JSON-RPC response from pool
     Args:
-        url: Pool URL string
-        use_tls: Boolean indicating if TLS should be used
+        sock: Socket connection to pool
     Returns:
-        Tuple of (host, port)
+        Parsed JSON response or None
     """
-    if '://' in url:
-        url = url.split('://')[1]
-    if ':' in url:
-        host, port = url.split(':', 1)
-        port = int(port)
-    else:
-        host = url
-        port = 443 if use_tls else 10032
-    return host, port
+    buffer = b""
+    while True:
+        chunk = sock.recv(4096)
+        if not chunk:
+            return None
+        buffer += chunk
+        while b"\n" in buffer:
+            line, buffer = buffer.split(b"\n", 1)
+            if line:
+                try:
+                    data = json.loads(line.decode('utf-8'))
+                    BackgroundLogger.debug(f"RECV: {json.dumps(data)}")
+                    return data
+                except json.JSONDecodeError:
+                    BackgroundLogger.warning(f"Invalid JSON received: {line}")
 
-def create_pool_connection(host, port, use_tls, tls_insecure=False):
+def connect_to_pool(url, use_tls=True, tls_insecure=False):
     """
-    Create socket connection to mining pool
+    Establish connection to mining pool
     Args:
-        host: Pool server hostname
-        port: Pool server port
+        url: Pool URL (host:port)
         use_tls: Enable TLS encryption
         tls_insecure: Disable certificate verification
     Returns:
-        Connected socket object
+        Connected socket or None on failure
     """
+    global pool_host, pool_port
+    url = url.replace("stratum+tcp://", "").replace("stratum+ssl://", "")
+    if ":" in url:
+        host, port_str = url.rsplit(":", 1)
+        port = int(port_str)
+    else:
+        host = url
+        port = 3333
+    pool_host = host
+    pool_port = port
     try:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(30)
-        sock.connect((host, port))
         if use_tls:
             context = ssl.create_default_context()
             if tls_insecure:
                 context.check_hostname = False
                 context.verify_mode = ssl.CERT_NONE
-            ssl_sock = context.wrap_socket(sock, server_hostname=host)
-            return ssl_sock
+            sock = context.wrap_socket(sock, server_hostname=host)
+        sock.connect((host, port))
+        sock.settimeout(None)
         return sock
     except Exception as e:
         BackgroundLogger.error(f"Connection failed: {e}")
-        sys.exit(1)
-
-def hex_to_bytes(hex_str):
-    """Convert hexadecimal string to bytes"""
-    return bytes.fromhex(hex_str)
-
-def bytes_to_hex(byte_data):
-    """Convert bytes to hexadecimal string"""
-    return byte_data.hex()
-
-def format_difficulty(diff):
-    """Format difficulty value with appropriate units"""
-    if diff >= 1_000_000_000:
-        return f"{diff/1_000_000_000:.2f}G"
-    elif diff >= 1_000_000:
-        return f"{diff/1_000_000:.2f}M"
-    elif diff >= 1_000:
-        return f"{diff/1_000:.2f}k"
-    else:
-        return str(diff)
-
-def calculate_monero_difficulty(target_hex):
-    """
-    Calculate mining difficulty from pool's difficulty value
-    For Monero/RandomX, pool sends DIFFICULTY, not target!
-    Args:
-        target_hex: Hexadecimal DIFFICULTY string (8 chars)
-    Returns:
-        Difficulty as integer
-    """
-    if len(target_hex) != 8:
-        raise ValueError(f"Invalid difficulty length: {len(target_hex)} chars (expected 8)")
-    difficulty = struct.unpack("<I", bytes.fromhex(target_hex))[0]
-    if args.debug and not args.background:
-        BackgroundLogger.debug(f"Raw hex: 0x{target_hex}")
-        BackgroundLogger.debug(f"Difficulty: {difficulty:,}")
-    return difficulty
-
-def set_new_job(job):
-    """
-    Process and distribute new mining job to workers
-    Args:
-        job: Dictionary containing job parameters from pool
-    Returns:
-        Boolean indicating if job was successfully queued
-    """
-    global job_version, current_valid_job_id, current_seed_hash
-    new_job_version = job_version + 1
-    with job_lock:
-        job_version = new_job_version
-    with current_valid_job_lock:
-        global previous_valid_job_id
-        previous_valid_job_id = current_valid_job_id
-        current_valid_job_id = job["job_id"]
-    job_data = {
-        "job_id": job["job_id"],
-        "blob": job["blob"],
-        "target": job["target"],
-        "seed_hash": job["seed_hash"],
-        "nonce_offset": job.get("nonce_offset", 39),
-        "height": job.get("height", 1),
-        "version": new_job_version
-    }
-    new_seed = job["seed_hash"]
-    if current_seed_hash and new_seed != current_seed_hash:
-        if not args.background:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}]  [WRN] Seed hash changed! Re-initializing RandomX VMs...")
-        seed_changed_flag.set()
-    current_seed_hash = new_seed
-    jobs_queued = 0
-    for _ in range(args.threads):
-        try:
-            job_queue.put_nowait(job_data)
-            jobs_queued += 1
-        except queue.Full:
-            if args.debug:
-                BackgroundLogger.debug(f"Job queue full after {jobs_queued} jobs")
-            break
-    if jobs_queued == 0:
-        return False
-    else:
-        return True
-
-def convert_compact_target_to_bytes(target_hex):
-    """
-    Convert pool's DIFFICULTY to 8-byte TARGET for mining
-    Args:
-        target_hex: Hexadecimal difficulty string (8 chars)
-    Returns:
-        8-byte big-endian target representation
-    Formula: target = max_target / difficulty
-    max_target = 0xFFFFFFFFFFFFFFFF (2^64 - 1)
-    """
-    with target_cache_lock:
-        if target_hex in target_cache:
-            return target_cache[target_hex]
-    if len(target_hex) != 8:
-        raise ValueError(f"Invalid difficulty length: {len(target_hex)} chars (expected 8)")
-    difficulty = struct.unpack("<I", bytes.fromhex(target_hex))[0]
-    if difficulty == 0:
-        target_64bit = 0xFFFFFFFFFFFFFFFF
-    else:
-        MAX_TARGET_64BIT = 0xFFFFFFFFFFFFFFFF
-        target_64bit = MAX_TARGET_64BIT // difficulty
-    target_big_endian = target_64bit.to_bytes(8, 'big')
-    with target_cache_lock:
-        target_cache[target_hex] = target_big_endian
-    if args.debug and not args.background:
-        BackgroundLogger.debug(f"Difficulty from pool: {difficulty:,}")
-        BackgroundLogger.debug(f"Calculated target: 0x{target_64bit:016x}")
-        BackgroundLogger.debug(f"For mining: hash must be < 0x{target_64bit:016x}")
-    return target_big_endian
-
-def update_stats(hashes=0, accepted=0, rejected=0):
-    """
-    Update mining statistics
-    Args:
-        hashes: Number of hashes to add to total
-        accepted: Number of accepted shares to add
-        rejected: Number of rejected shares to add
-    """
-    with stats_lock:
-        if hashes > 0:
-            stats["hashes"] += hashes
-        if accepted > 0:
-            stats["accepted"] += accepted
-            stats["last_share"] = time.time()
-        if rejected > 0:
-            stats["rejected"] += rejected
-
-def hashrate_sampler():
-    """Periodically sample and store hashrate statistics"""
-    last_hash = 0
-    last_time = time.time()
-    while not shutdown_flag.is_set():
-        time.sleep(1)
-        with hash_counter_lock:
-            now_hash = hash_counter
-        now_time = time.time()
-        delta_hash = now_hash - last_hash
-        delta_time = now_time - last_time
-        if delta_time > 0:
-            rate = delta_hash / delta_time
-            with stats_lock:
-                stats["hash_history"].append((rate, now_time))
-                if len(stats["hash_history"]) > 120:
-                    stats["hash_history"] = stats["hash_history"][-120:]
-        last_hash = now_hash
-        last_time = now_time
-
-def print_stats():
-    """Print current mining statistics to console"""
-    if args.background or shutdown_flag.is_set():
-        return
-    now = time.time()
-    with stats_lock:
-        if now - stats.get("last_stat_print", 0) < 10:
-            return
-        stats["last_stat_print"] = now
-        hash_history = stats["hash_history"].copy()
-        accepted = stats["accepted"]
-        rejected = stats["rejected"]
-        last_share_time = stats["last_share"]
-    if not hash_history:
-        return
-    def avg(window):
-        cutoff = now - window
-        vals = [h for h, t in hash_history if t >= cutoff]
-        return sum(vals) / len(vals) if vals else 0
-    rate_now = hash_history[-1][0]
-    rate_10s = avg(10)
-    rate_60s = avg(60)
-    def format_hashrate(h):
-        if h >= 1_000_000:
-            return f"{h/1_000_000:.2f} MH/s"
-        elif h >= 1_000:
-            return f"{h/1_000:.2f} kH/s"
-        else:
-            return f"{h:.2f} H/s"
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.BLUE}[APP]{Style.RESET_ALL} speed now: {Fore.LIGHTYELLOW_EX}{format_hashrate(rate_now)}{Style.RESET_ALL} 10s: {Fore.LIGHTYELLOW_EX}{format_hashrate(rate_10s)}{Style.RESET_ALL} 60s: {Fore.LIGHTYELLOW_EX}{format_hashrate(rate_60s)}{Style.RESET_ALL}")
-    total = accepted + rejected
-    if total:
-        ratio = accepted / total * 100
-        print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.BLUE}[APP]{Style.RESET_ALL} accepted: {Fore.GREEN}{accepted}/{total}{Style.RESET_ALL} rejected: {Fore.RED}{rejected}/{total}{Style.RESET_ALL} ({ratio:.1f}%)")
-    if accepted:
-        ago = int(now - last_share_time)
-        unit = "s" if ago < 60 else "m" if ago < 3600 else "h"
-        value = ago if unit == "s" else ago // 60 if unit == "m" else ago // 3600
-        print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.BLUE}[APP]{Style.RESET_ALL} last share: {value}{unit} ago")
-
-def shutdown_miner(sock=None):
-    """Shutdown miner and cleanup resources"""
-    global global_randomx_cache, global_randomx_dataset
-    if shutdown_flag.is_set():
-        return
-    shutdown_flag.set()
-    if not args.background:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.BLUE}[APP]{Style.RESET_ALL} shutting down...")
-    for thread in mining_threads:
-        try:
-            thread.join(timeout=2)
-        except:
-            pass
-    with global_randomx_lock:
-        if global_randomx_dataset is not None:
-            try:
-                randomx.randomx_release_dataset(global_randomx_dataset)
-            except:
-                pass
-            global_randomx_dataset = None
-        if global_randomx_cache is not None:
-            try:
-                randomx.randomx_release_cache(global_randomx_cache)
-            except:
-                pass
-            global_randomx_cache = None
-    if sock:
-        try:
-            sock.close()
-        except:
-            pass
-
-def meets_submit_throttle(hash_int, throttle):
-    """
-    Check if share meets throttling criteria
-    Args:
-        hash_int: 64-bit hash value
-        throttle: Maximum difficulty for submission
-    Returns:
-        Boolean indicating if share should be submitted
-    """
-    if throttle is None:
-        return True
-    MAX_TARGET_64 = 0xFFFFFFFFFFFFFFFF
-    throttle_target = MAX_TARGET_64 // throttle
-    return hash_int < throttle_target
-
-def optimize_mining_environment():
-    """Optimize system environment for mining performance"""
-    try:
-        p = psutil.Process()
-        p.nice(psutil.REALTIME_PRIORITY_CLASS)
-        kernel32 = ctypes.windll.kernel32
-        kernel32.SetErrorMode(0x0001 | 0x0002 | 0x0004)
-        if not args.background:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.BLUE}[INF]{Style.RESET_ALL} environment optimized for mining")
-    except Exception as e:
-        if args.debug:
-            BackgroundLogger.debug(f"Optimization error: {e}")
-
-def reconnect_to_pool():
-    """
-    Re-establish connection to mining pool after disconnect
-    Returns:
-        New socket connection or None if reconnection failed
-    """
-    global session_id, pool_socket, pool_host, pool_port
-    if not args.background:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.MAGENTA}[NET]{Style.RESET_ALL} attempting to reconnect...")
-    try:
-        try:
-            pool_socket.close()
-        except:
-            pass
-        new_socket = create_pool_connection(pool_host, pool_port, args.tls, args.tls_insecure)
-        login_msg = {
-            "id": 1,
-            "method": "login",
-            "params": {
-                "login": args.user,
-                "pass": args.password,
-                "agent": "XMRig/6.12.1 (Windows NT 10.0; Win64; x64) msvc/2019"
-            }
-        }
-        stratum_send(new_socket, login_msg)
-        response = None
-        timeout = time.time() + 10
-        while time.time() < timeout and not shutdown_flag.is_set():
-            try:
-                msg = net_queue.get(timeout=1)
-                if msg.get("id") == 1:
-                    response = msg
-                    break
-            except queue.Empty:
-                continue
-        if not response or response.get("error"):
-            error_msg = response.get("error") if response else "timeout"
-            BackgroundLogger.error(f"Reconnect failed: {error_msg}")
-            return None
-        result_data = response.get("result", {})
-        if isinstance(result_data, dict):
-            new_session_id = result_data.get("id")
-        else:
-            new_session_id = str(result_data) if result_data else None
-        if not new_session_id:
-            BackgroundLogger.error("No session id in reconnect response")
-            return None
-        session_id = new_session_id
-        if not args.background:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.MAGENTA}[NET]{Style.RESET_ALL} reconnected, new session: {session_id}")
-        return new_socket
-    except Exception as e:
-        BackgroundLogger.error(f"Reconnect error: {e}")
         return None
 
-def stratum_recv_loop(sock):
+# Job distribution function
+def distribute_job_to_workers(job):
     """
-    Receive loop for stratum protocol messages
+    Distribute new mining job to worker threads
     Args:
-        sock: Socket connection to pool
+        job: Job data dictionary
     """
-    buffer = b""
-    sock.settimeout(2)
+    global job_version, current_valid_job_id, current_seed_hash
+    with job_lock:
+        new_seed = job["seed_hash"]
+        with current_valid_job_lock:
+            global previous_valid_job_id
+            previous_valid_job_id = current_valid_job_id
+            current_valid_job_id = job["job_id"]
+        if current_seed_hash and new_seed != current_seed_hash:
+            if not args.background:
+                BackgroundLogger.info(f"Seed change detected: {new_seed[:16]}...")
+            seed_changed_flag.set()
+        current_seed_hash = new_seed
+        for _ in range(args.threads * 2):
+            try:
+                job_queue.put_nowait(job)
+            except queue.Full:
+                break
+
+# Main mining loop
+def main():
+    """Main program entry point - coordinates mining operations"""
+    global pool_socket, session_id, latest_job
+    if not args.background:
+        print(f"""
+{Fore.CYAN}╔═══════════════════════════════════════════════════════════════╗
+║                      PYRIG v4.0 - OPTIMIZED                   ║
+║                   High-Performance CPU Miner                  ║
+╚═══════════════════════════════════════════════════════════════╝{Style.RESET_ALL}
+""")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.BLUE}[INF]{Style.RESET_ALL} Mode: {Fore.GREEN}FULL (2GB){Style.RESET_ALL} | Threads: {Fore.YELLOW}{args.threads}{Style.RESET_ALL} | Optimization: {Fore.RED}AGGRESSIVE{Style.RESET_ALL}")
+        print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.BLUE}[INF]{Style.RESET_ALL} Batch Config: MIN={BATCH_MIN} MAX={BATCH_MAX} START={current_batch_size}")
+    
+    pool_socket = connect_to_pool(args.url, args.tls, args.tls_insecure)
+    if not pool_socket:
+        sys.exit(1)
+    
+    send_json_rpc(pool_socket, "login", {
+        "login": args.user,
+        "pass": args.password,
+        "agent": "PYRIG/4.0-Optimized"
+    })
+    
+    response = receive_json_rpc(pool_socket)
+    if not response or "result" not in response:
+        BackgroundLogger.error("Login failed")
+        sys.exit(1)
+    
+    result = response["result"]
+    session_id = result.get("id")
+    job = result.get("job")
+    
+    if not job:
+        BackgroundLogger.error("No initial job received")
+        sys.exit(1)
+    
+    latest_job = job
+    distribute_job_to_workers(job)
+    
+    if not args.background:
+        BackgroundLogger.info(f"Connected to pool: {pool_host}:{pool_port}")
+        BackgroundLogger.info(f"Initial job: {job['job_id'][:16]}... (diff: {job.get('target', 'unknown')})")
+    
+    flags = randomx.RANDOMX_FLAG_FULL_MEM if args.mode == "full" else 0
+    if platform.system() == "Windows":
+        flags |= randomx.RANDOMX_FLAG_LARGE_PAGES
+    flags |= randomx.RANDOMX_FLAG_HARD_AES | randomx.RANDOMX_FLAG_JIT
+    
+    for i in range(args.threads):
+        t = threading.Thread(target=mining_worker, args=(i, flags, job["seed_hash"]), daemon=True)
+        t.start()
+        mining_threads.append(t)
+    
+    threading.Thread(target=submit_worker, args=(pool_socket,), daemon=True).start()
+    threading.Thread(target=network_receiver, args=(pool_socket,), daemon=True).start()
+    threading.Thread(target=stats_printer, daemon=True).start()
+    threading.Thread(target=job_queue_monitor, daemon=True).start()
+    
     while not shutdown_flag.is_set():
         try:
-            data = sock.recv(4096)
+            msg = net_queue.get(timeout=1)
+            if "method" in msg and msg["method"] == "job":
+                job = msg["params"]
+                latest_job = job
+                distribute_job_to_workers(job)
+                if args.verbose and not args.background:
+                    BackgroundLogger.info(f"New job: {job['job_id'][:16]}... (diff: {job.get('target', 'unknown')})")
+        except queue.Empty:
+            continue
+        except KeyboardInterrupt:
+            break
+    
+    return pool_socket
+
+# Network receiver thread
+def network_receiver(sock):
+    """
+    Receive and process messages from pool
+    Args:
+        sock: Pool socket connection
+    """
+    while not shutdown_flag.is_set():
+        try:
+            data = receive_json_rpc(sock)
             if not data:
-                BackgroundLogger.error("Pool closed connection")
+                BackgroundLogger.error("Pool connection lost")
                 shutdown_flag.set()
                 break
-            buffer += data
-            while b"\n" in buffer:
-                line, buffer = buffer.split(b"\n", 1)
-                try:
-                    msg = json.loads(line.decode())
-                    if args.debug and not args.background:
-                        BackgroundLogger.debug(f"NET   {json.dumps(msg)}")
-                    msg_id = msg.get("id")
-                    if msg_id is not None and msg_id >= 1000:
-                        submit_response_queue.put(msg)
-                    else:
-                        net_queue.put(msg)
-                except json.JSONDecodeError:
-                    continue
-        except socket.timeout:
-            if shutdown_flag.is_set():
-                BackgroundLogger.debug("Socket timeout, shutdown detected")
-                break
-            continue
-        except ConnectionError as e:
-            BackgroundLogger.error(f"Connection error: {e}")
-            shutdown_flag.set()
-            break
+            if "method" in data:
+                net_queue.put(data)
+            elif "id" in data:
+                submit_response_queue.put(data)
         except Exception as e:
-            BackgroundLogger.error(f"Receive failed: {e}")
-            shutdown_flag.set()
+            if not shutdown_flag.is_set():
+                BackgroundLogger.error(f"Network error: {e}")
             break
 
+# Submit worker thread
+def submit_worker(sock):
+    """
+    Handle share submission to pool
+    Args:
+        sock: Pool socket connection
+    """
+    global submit_id_counter
+    while not shutdown_flag.is_set():
+        try:
+            submit_data = submit_queue.get(timeout=1)
+        except queue.Empty:
+            continue
+        
+        with current_valid_job_lock:
+            if submit_data["job_id"] not in [current_valid_job_id, previous_valid_job_id]:
+                BackgroundLogger.debug(f"Stale share discarded: {submit_data['job_id'][:16]}...")
+                continue
+        
+        with pending_submits_lock:
+            submit_id_counter += 1
+            submit_id = submit_id_counter
+            pending_submits[submit_id] = submit_data
+        
+        try:
+            send_json_rpc(sock, "submit", {
+                "id": session_id,
+                "job_id": submit_data["job_id"],
+                "nonce": submit_data["nonce"],
+                "result": submit_data["result"]
+            }, submit_id)
+        except Exception as e:
+            BackgroundLogger.error(f"Submit failed: {e}")
+            with pending_submits_lock:
+                pending_submits.pop(submit_id, None)
+        
+        try:
+            response = submit_response_queue.get(timeout=SUBMIT_TIMEOUT)
+            resp_id = response.get("id")
+            
+            with pending_submits_lock:
+                original_submit = pending_submits.pop(resp_id, None)
+            
+            if original_submit:
+                if "error" in response and response["error"]:
+                    with stats_lock:
+                        stats["rejected"] += 1
+                    if not args.background:
+                        error_msg = response["error"].get("message", "Unknown error")
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.RED}[REJ]{Style.RESET_ALL} Share rejected: {error_msg}")
+                else:
+                    with stats_lock:
+                        stats["accepted"] += 1
+                        stats["last_share"] = time.time()
+                    if not args.background:
+                        worker_id = original_submit.get("worker_id", "?")
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.GREEN}[ACC]{Style.RESET_ALL} Share accepted (worker {worker_id})")
+        except queue.Empty:
+            BackgroundLogger.warning("Submit response timeout")
+            with pending_submits_lock:
+                pending_submits.pop(submit_id, None)
+
+# Stats printer thread
+def stats_printer():
+    """Print periodic mining statistics"""
+    while not shutdown_flag.is_set():
+        time.sleep(10)
+        with stats_lock:
+            now = time.time()
+            elapsed = now - stats["start_time"]
+            if elapsed < 1:
+                continue
+            
+            current_hashes = hash_counter
+            stats["hash_history"].append((now, current_hashes))
+            stats["hash_history"] = [h for h in stats["hash_history"] if now - h[0] < 60]
+            
+            if len(stats["hash_history"]) >= 2:
+                time_span = stats["hash_history"][-1][0] - stats["hash_history"][0][0]
+                hash_span = stats["hash_history"][-1][1] - stats["hash_history"][0][1]
+                hashrate_60s = hash_span / time_span if time_span > 0 else 0
+            else:
+                hashrate_60s = current_hashes / elapsed
+            
+            if not args.background:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.CYAN}[STAT]{Style.RESET_ALL} Speed: {Fore.GREEN}{hashrate_60s:.1f} H/s{Style.RESET_ALL} | Shares: {Fore.YELLOW}{stats['accepted']}{Style.RESET_ALL}/{Fore.RED}{stats['rejected']}{Style.RESET_ALL} | Batch: {current_batch_size}")
+
+# Mining worker thread
 def mining_worker(worker_id, flags, initial_seed):
     """
-    Mining worker thread for processing jobs and calculating hashes
+    Individual mining worker thread
     Args:
         worker_id: Unique identifier for this worker
         flags: RandomX configuration flags
@@ -638,7 +515,8 @@ def mining_worker(worker_id, flags, initial_seed):
             target_bytes = convert_compact_target_to_bytes(new_job["target"])
             current_target_int = int.from_bytes(target_bytes, "big")
         if current_job_data is None:
-            time.sleep(0.001)
+            # OPTIMIZED: Reduced sleep time for faster job pickup
+            time.sleep(0.0005)
             continue
         with batch_lock:
             batch_size = max(current_batch_size, BATCH_MIN)
@@ -661,7 +539,8 @@ def mining_worker(worker_id, flags, initial_seed):
             hash_bytes = bytes(ffi.buffer(hash_output_buffer, 32))
             hash_int = int.from_bytes(hash_bytes[0:8], "little")
             local_count += 1
-            if local_count >= 50:
+            # OPTIMIZED: Increased threshold to reduce lock contention
+            if local_count >= 150:
                 with hash_counter_lock:
                     hash_counter += local_count
                 local_count = 0
@@ -682,7 +561,8 @@ def mining_worker(worker_id, flags, initial_seed):
         batch_time = time.time() - batch_start
         if batch_time > 0:
             scale = TARGET_BATCH_TIME / batch_time
-            scale = max(0.7, min(1.4, scale))
+            # OPTIMIZED: More aggressive scaling for faster adaptation
+            scale = max(0.75, min(1.6, scale))
             new_batch = int(batch_size * scale)
             new_batch = max(BATCH_MIN, min(new_batch, BATCH_MAX))
             with batch_lock:
@@ -698,274 +578,55 @@ def job_queue_monitor():
     while not shutdown_flag.is_set():
         current_size = job_queue.qsize()
         if current_size < args.threads and latest_job is not None:
-            needed = args.threads - current_size
-            with job_lock:
-                current_version = job_version
-            for _ in range(needed):
+            for _ in range(args.threads * 2):
                 try:
-                    job_queue.put_nowait({**latest_job, "version": current_version})
+                    job_queue.put_nowait(latest_job)
                 except queue.Full:
                     break
-        time.sleep(0.05)
+        time.sleep(0.1)
 
-def submit_worker(sock):
+def shutdown_miner(sock):
     """
-    Worker thread for submitting shares to pool
+    Gracefully shutdown miner
     Args:
-        sock: Socket connection to pool
+        sock: Pool socket connection
     """
-    global submit_id_counter, session_id, pool_socket
-    while not shutdown_flag.is_set():
-        try:
-            submit_data = submit_queue.get(timeout=1)
-        except queue.Empty:
-            continue
-        with current_valid_job_lock:
-            if submit_data["job_id"] not in [current_valid_job_id, previous_valid_job_id]:
-                update_stats(rejected=1)
-                if args.debug:
-                    BackgroundLogger.debug(f"STALE Dropping outdated job {submit_data['job_id'][:8]}...")
-                continue
-        if session_id is None:
-            continue
-        submit_id_counter += 1
-        msg_id = 1000 + submit_id_counter
-        submit_msg = {
-            "id": msg_id,
-            "method": "submit",
-            "params": {
-                "id": session_id,
-                "job_id": submit_data["job_id"],
-                "nonce": submit_data["nonce"],
-                "result": submit_data["result"]
-            }
-        }
-        with pending_submits_lock:
-            pending_submits[msg_id] = {
-                "time": time.time(),
-                "data": submit_data
-            }
-        if args.debug and not args.background:
-            age = time.time() - submit_data.get("timestamp", time.time())
-            BackgroundLogger.debug(f"NET   SUBMIT: {submit_data['job_id'][:8]}... (age: {age:.2f}s)")
-        stratum_send(sock, submit_msg)
-        try:
-            response = submit_response_queue.get(timeout=SUBMIT_TIMEOUT)
-        except queue.Empty:
-            if args.debug and not args.background:
-                BackgroundLogger.debug(f"No response for submit {msg_id} (timeout)")
-            continue
-        resp_id = response.get("id")
-        with pending_submits_lock:
-            pending_submits.pop(resp_id, None)
-        # FINAL authority: result OK
-        if response.get("result", {}).get("status") == "OK":
-            update_stats(accepted=1)
-            if not args.background:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.BLUE}[APP]{Style.RESET_ALL} {Fore.GREEN}share accepted{Style.RESET_ALL}")
-            continue
-        # Handle error
-        if response.get("error"):
-            err_msg = response["error"].get("message", "").lower()
-            # Soft reject → IGNORE
-            if "low difficulty" in err_msg:
-                # jangan hitung apa-apa
-                continue
-            # Hard reject
-            update_stats(rejected=1)
-            if not args.background:
-                print(f"[{datetime.now().strftime('%H:%M:%S')}]  miner    share rejected: {err_msg}")
-            continue
-        continue
-
-def cleanup_pending_submits():
-    """Periodically remove stale entries from pending_submits"""
-    while not shutdown_flag.is_set():
-        shutdown_flag.wait(30)
-        if shutdown_flag.is_set():
-            break
-        now = time.time()
-        with pending_submits_lock:
-            stale = [msg_id for msg_id, data in pending_submits.items()
-                     if now - data["time"] > SUBMIT_TIMEOUT * 2]
-            for msg_id in stale:
-                del pending_submits[msg_id]
-            if stale and args.debug and not args.background:
-                BackgroundLogger.debug(f"CLEANUP Removed {len(stale)} stale pending submits")
-
-def main():
-    """Main miner initialization and control loop"""
-    global session_id, latest_job, pool_socket, pool_host, pool_port
-    optimize_mining_environment()
-    #if not args.background:
-        #print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.BLUE}[INF]{Style.RESET_ALL} Starting PYRIG Miner")
-    try:
-        pool_host, pool_port = parse_pool_url(args.url, args.tls)
-        pool_socket = create_pool_connection(pool_host, pool_port, args.tls, args.tls_insecure)
-        pool_socket.settimeout(30)
-    except Exception as e:
-        BackgroundLogger.error(f"Connection failed: {e}")
-        sys.exit(1)
     if not args.background:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.MAGENTA}[NET]{Style.RESET_ALL} use pool: {pool_host}:{pool_port}")
-    recv_thread = threading.Thread(target=stratum_recv_loop, args=(pool_socket,), daemon=True)
-    recv_thread.start()
-    try:
-        login_msg = {
-            "id": 1,
-            "method": "login",
-            "params": {
-                "login": args.user,
-                "pass": args.password,
-                "agent": "XMRig/6.12.1 (Windows NT 10.0; Win64; x64) msvc/2019"
-            }
-        }
-        stratum_send(pool_socket, login_msg)
-        response = None
-        timeout = time.time() + 10
-        while time.time() < timeout and not shutdown_flag.is_set():
-            try:
-                msg = net_queue.get(timeout=1)
-                if msg.get("id") == 1:
-                    response = msg
-                    break
-            except queue.Empty:
-                continue
-        if not response or response.get("error"):
-            error_msg = response.get("error") if response else "timeout"
-            BackgroundLogger.error(f"Login failed: {error_msg}")
-            sys.exit(1)
-        result_data = response.get("result", {})
-        if isinstance(result_data, dict):
-            session_id = result_data.get("id")
-        else:
-            session_id = str(result_data) if result_data else None
-        if not session_id:
-            session_id = response.get("id")
-        if not session_id:
-            BackgroundLogger.error("No session id received")
-            sys.exit(1)
+        print(f"\n[{datetime.now().strftime('%H:%M:%S')}]  {Back.YELLOW}[WRN]{Style.RESET_ALL} Shutting down...")
+    shutdown_flag.set()
+    for t in mining_threads:
+        t.join(timeout=2)
+    if sock:
+        try:
+            sock.close()
+        except:
+            pass
+    with stats_lock:
+        elapsed = time.time() - stats["start_time"]
+        avg_hashrate = hash_counter / elapsed if elapsed > 0 else 0
         if not args.background:
-            print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.MAGENTA}[NET]{Style.RESET_ALL} use algo: {Fore.GREEN}rx/0{Style.RESET_ALL}")
-            print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.MAGENTA}[NET]{Style.RESET_ALL} connected with session id: {Fore.GREEN}{session_id}{Style.RESET_ALL}")
-        if isinstance(result_data, dict) and "job" in result_data:
-            job = result_data["job"]
-        else:
-            job = None
-            job_timeout = time.time() + 10
-            while time.time() < job_timeout and not shutdown_flag.is_set():
-                try:
-                    msg = net_queue.get(timeout=1)
-                    if msg.get("method") == "job":
-                        job = msg["params"]
-                        break
-                except queue.Empty:
-                    continue
-            if not job:
-                BackgroundLogger.error("No initial job")
-                sys.exit(1)
-        seed_hash = job["seed_hash"]
-        latest_job = job
-        if args.verbose and not args.background:
-            difficulty = calculate_monero_difficulty(job['target'])
-            print(f"[{datetime.now().strftime('%H:%M:%S')}]  [VERBOSE] net      initial job difficulty: {difficulty:,} (target: 0x{job['target']})")
-        set_new_job(job)
-    except Exception as e:
-        BackgroundLogger.error(f"Login failed: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
-    available_flags = randomx.randomx_get_flags()
-    rx_flags = randomx.RANDOMX_FLAG_DEFAULT
-    if args.mode == "full":
-        rx_flags |= randomx.RANDOMX_FLAG_FULL_MEM
-    if available_flags & randomx.RANDOMX_FLAG_JIT:
-        rx_flags |= randomx.RANDOMX_FLAG_JIT
-    if available_flags & randomx.RANDOMX_FLAG_HARD_AES:
-        rx_flags |= randomx.RANDOMX_FLAG_HARD_AES
-    if available_flags & randomx.RANDOMX_FLAG_LARGE_PAGES:
-        rx_flags |= randomx.RANDOMX_FLAG_LARGE_PAGES
-    #if not args.background:
-        #print(f"[{datetime.now().strftime('%H:%M:%S')}]  [CPU] use profile RX/0 with {Fore.GREEN}{args.threads} threads{Style.RESET_ALL}")
-    for i in range(args.threads):
-        thread = threading.Thread(target=mining_worker, args=(i, rx_flags, seed_hash), daemon=True)
-        thread.start()
-        mining_threads.append(thread)
-    queue_monitor = threading.Thread(target=job_queue_monitor, daemon=True)
-    queue_monitor.start()
-    submit_thread = threading.Thread(target=submit_worker, args=(pool_socket,), daemon=True)
-    submit_thread.start()
-    cleanup_thread = threading.Thread(target=cleanup_pending_submits, daemon=True)
-    cleanup_thread.start()
-    sampler_thread = threading.Thread(target=hashrate_sampler, daemon=True)
-    sampler_thread.start()
-    def stats_printer():
-        time.sleep(15)
-        while not shutdown_flag.is_set():
-            print_stats()
-            time.sleep(5)
-    if not args.background:
-        stats_thread = threading.Thread(target=stats_printer, daemon=True)
-        stats_thread.start()
-    if not args.background:
-        print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.BLUE}[APP]{Style.RESET_ALL} MINING STARTED")
-    try:
-        while not shutdown_flag.is_set():
-            try:
-                message = net_queue.get(timeout=1)
-                if message.get("method") == "job":
-                    job = message["params"]
-                    latest_job = job
-                    set_new_job(job)
-                    if not args.background:
-                        difficulty = struct.unpack("<I", bytes.fromhex(job["target"]))[0]
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.MAGENTA}[NET]{Style.RESET_ALL} new job from: {pool_host}:{pool_port} difficulty: {format_difficulty(difficulty)}")
-                elif message.get("method") == "keepalived":
-                    stratum_send(pool_socket, {"id": None, "method": "keepalived"})
-            except queue.Empty:
-                time.sleep(0.01)
-                continue
-            except Exception as e:
-                BackgroundLogger.error(f"Network error: {e}")
-                break
-    except KeyboardInterrupt:
-        pass
-    finally:
-        shutdown_miner(pool_socket)
-    return pool_socket
+            print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.BLUE}[INF]{Style.RESET_ALL} Session stats:")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.BLUE}[INF]{Style.RESET_ALL}   Runtime: {elapsed/3600:.2f}h")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.BLUE}[INF]{Style.RESET_ALL}   Avg hashrate: {avg_hashrate:.1f} H/s")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.BLUE}[INF]{Style.RESET_ALL}   Accepted: {stats['accepted']}")
+            print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.BLUE}[INF]{Style.RESET_ALL}   Rejected: {stats['rejected']}")
 
-def find_dll(filename, search_dirs):
-    """
-    Search for DLL file in specified directories
-    Args:
-        filename: Name of DLL file to find
-        search_dirs: List of directories to search
-    Returns:
-        Full path to DLL or None if not found
-    """
-    for base_dir in search_dirs:
-        for root, dirs, files in os.walk(base_dir):
-            if filename in files:
-                return os.path.join(root, filename)
-    return None
-
-# Main function - search for RandomX .dll library
-base_dir = os.path.dirname(__file__)
-candidate_dirs = [
-    os.path.join(base_dir, "build"),
-    os.path.join(base_dir, "build", "windows"),
-    os.path.join(base_dir, "build", "windows", "tevador"),
-    os.path.join(base_dir, "assets"),
-    base_dir
-]
-dll_path = find_dll("librandomx.dll", candidate_dirs)
-if not dll_path:
-    BackgroundLogger.error("RandomX library not found")
-    sys.exit(1)
+# RandomX library loading
 if not args.background:
-    print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.BLUE}[INF]{Style.RESET_ALL} loading RandomX library from: {dll_path}")
-
-# RandomX binding file CFFI then load library
+    print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.BLUE}[INF]{Style.RESET_ALL} Loading RandomX library...")
+system = platform.system()
+if system == "Windows":
+    dll_path = "librandomx.dll"
+elif system == "Linux":
+    dll_path = "./librandomx.so"
+elif system == "Darwin":
+    dll_path = "./librandomx.dylib"
+else:
+    BackgroundLogger.error(f"Unsupported OS: {system}")
+    sys.exit(1)
+if not os.path.exists(dll_path):
+    BackgroundLogger.error(f"RandomX library not found: {dll_path}")
+    sys.exit(1)
 ffi = FFI()
 ffi.cdef("""
     typedef enum {
@@ -974,12 +635,14 @@ ffi.cdef("""
         RANDOMX_FLAG_HARD_AES = 2,
         RANDOMX_FLAG_FULL_MEM = 4,
         RANDOMX_FLAG_JIT = 8,
-        RANDOMX_FLAG_SECURE = 16
+        RANDOMX_FLAG_SECURE = 16,
+        RANDOMX_FLAG_ARGON2_SSSE3 = 32,
+        RANDOMX_FLAG_ARGON2_AVX2 = 64,
+        RANDOMX_FLAG_ARGON2 = 96
     } randomx_flags;
     typedef struct randomx_cache randomx_cache;
     typedef struct randomx_dataset randomx_dataset;
     typedef struct randomx_vm randomx_vm;
-    randomx_flags randomx_get_flags(void);
     randomx_cache* randomx_alloc_cache(randomx_flags flags);
     void randomx_init_cache(randomx_cache* cache, const void* key, size_t keySize);
     void randomx_release_cache(randomx_cache* cache);
@@ -1019,7 +682,8 @@ class RandomXVM:
         self.dataset = None
         self.vm = None
         self.worker_nonce_lock = threading.Lock()
-        self.worker_nonce = worker_id * 1000000
+        # OPTIMIZED: Increased nonce spacing to prevent collision between workers
+        self.worker_nonce = worker_id * 20000000
         self.init_in_background()
     
     def init_in_background(self):
