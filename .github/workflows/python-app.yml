@@ -9,6 +9,9 @@ permissions:
 jobs:
   Build:
     runs-on: windows-latest
+    env:
+      TERM: xterm
+      FORCE_COLOR: 1
     steps:
     - uses: actions/checkout@v4
     - name: Set up Python 3.10
