@@ -17,7 +17,7 @@
 
 # Import required libraries
 import os, sys, time, ssl, json, socket, psutil, struct, threading, queue, argparse, platform, ctypes, traceback
-from datetime import datetime; from cffi import FFI; from colorama import init, Back, Fore, Style; init()
+from datetime import datetime; from cffi import FFI; from colorama import init, Back, Fore, Style; init(); from collections import deque
 
 # All global variables
 hash_counter = 0
@@ -31,7 +31,6 @@ BATCH_MIN = 100
 SUBMIT_TIMEOUT = 15
 BATCH_MAX = 5000
 TARGET_BATCH_TIME = 0.2
-current_seed_hash = None
 pool_socket = None
 pool_host = None
 pool_port = None
@@ -51,7 +50,7 @@ stats_lock = threading.Lock()
 stats = {
     "hashes": 0, "accepted": 0, "rejected": 0,
     "last_share": time.time(), "start_time": time.time(),
-    "hash_history": [],
+    "hash_history": deque(maxlen=120),
     "last_stat_print": 0
 }
 job_version = 0
@@ -254,7 +253,7 @@ def set_new_job(job):
     Returns:
         Boolean indicating if job was successfully queued
     """
-    global job_version, current_valid_job_id, current_seed_hash
+    global job_version, current_valid_job_id, global_seed_hash
     new_job_version = job_version + 1
     with job_lock:
         job_version = new_job_version
@@ -272,11 +271,11 @@ def set_new_job(job):
         "version": new_job_version
     }
     new_seed = job["seed_hash"]
-    if current_seed_hash and new_seed != current_seed_hash:
+    if global_seed_hash and new_seed != global_seed_hash:
         if not args.background:
             print(f"[{datetime.now().strftime('%H:%M:%S')}]  [WRN] Seed hash changed! Re-initializing RandomX VMs...")
         seed_changed_flag.set()
-    current_seed_hash = new_seed
+    global_seed_hash = new_seed
     jobs_queued = 0
     for _ in range(args.threads):
         try:
@@ -515,20 +514,47 @@ def reconnect_to_pool():
 
 def stratum_recv_loop(sock):
     """
-    Receive loop for stratum protocol messages
+    Receive loop for stratum protocol messages with auto-reconnect
     Args:
         sock: Socket connection to pool
     """
+    global pool_socket
     buffer = b""
     sock.settimeout(2)
+    retry_count = 0
+    max_retries = 10
+    
     while not shutdown_flag.is_set():
         try:
             data = sock.recv(4096)
             if not data:
                 BackgroundLogger.error("Pool closed connection")
-                shutdown_flag.set()
-                break
+                if retry_count < max_retries:
+                    retry_count += 1
+                    backoff = min(30, 2 ** retry_count)
+                    if not args.background:
+                        print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.YELLOW}[WRN]{Style.RESET_ALL} Reconnecting in {backoff}s... (attempt {retry_count}/{max_retries})")
+                    time.sleep(backoff)
+                    new_socket = reconnect_to_pool()
+                    if new_socket:
+                        try:
+                            sock.close()
+                        except:
+                            pass
+                        sock = new_socket
+                        pool_socket = new_socket
+                        buffer = b""
+                        retry_count = 0
+                        if not args.background:
+                            print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.GREEN}[OK]{Style.RESET_ALL} Reconnection successful!")
+                        continue
+                    continue
+                else:
+                    BackgroundLogger.error(f"Max reconnection attempts ({max_retries}) reached")
+                    shutdown_flag.set()
+                    break
             buffer += data
+            retry_count = 0
             while b"\n" in buffer:
                 line, buffer = buffer.split(b"\n", 1)
                 try:
@@ -549,12 +575,48 @@ def stratum_recv_loop(sock):
             continue
         except ConnectionError as e:
             BackgroundLogger.error(f"Connection error: {e}")
-            shutdown_flag.set()
-            break
+            if retry_count < max_retries:
+                retry_count += 1
+                backoff = min(30, 2 ** retry_count)
+                if not args.background:
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.YELLOW}[WRN]{Style.RESET_ALL} Connection lost, reconnecting in {backoff}s...")
+                time.sleep(backoff)
+                new_socket = reconnect_to_pool()
+                if new_socket:
+                    try:
+                        sock.close()
+                    except:
+                        pass
+                    sock = new_socket
+                    pool_socket = new_socket
+                    buffer = b""
+                    retry_count = 0
+                    continue
+                continue
+            else:
+                BackgroundLogger.error(f"Max reconnection attempts reached")
+                shutdown_flag.set()
+                break
         except Exception as e:
             BackgroundLogger.error(f"Receive failed: {e}")
+            if retry_count < max_retries:
+                retry_count += 1
+                backoff = min(30, 2 ** retry_count)
+                time.sleep(backoff)
+                new_socket = reconnect_to_pool()
+                if new_socket:
+                    try:
+                        sock.close()
+                    except:
+                        pass
+                    sock = new_socket
+                    pool_socket = new_socket
+                    buffer = b""
+                    retry_count = 0
+                    continue
             shutdown_flag.set()
             break
+
 
 def mining_worker(worker_id, flags, initial_seed):
     """
@@ -583,7 +645,7 @@ def mining_worker(worker_id, flags, initial_seed):
     while not shutdown_flag.is_set():
         if seed_changed_flag.is_set():
             vm.destroy()
-            vm = RandomXVM(flags, current_seed_hash, worker_id)
+            vm = RandomXVM(flags, global_seed_hash, worker_id)
             if not vm.wait_until_ready(args.init_timeout):
                 return
             seed_changed_flag.clear()
