@@ -27,10 +27,10 @@ global_randomx_cache = None
 global_randomx_dataset = None
 global_randomx_lock = threading.Lock()
 global_seed_hash = None
-BATCH_MIN = 100
+BATCH_MIN = 200  # Increased from 100 for better efficiency
 SUBMIT_TIMEOUT = 15
-BATCH_MAX = 5000
-TARGET_BATCH_TIME = 0.2
+BATCH_MAX = 8000  # Increased from 5000 for high-end CPUs
+TARGET_BATCH_TIME = 0.18  # Reduced from 0.2 for faster job switching
 pool_socket = None
 pool_host = None
 pool_port = None
@@ -627,6 +627,11 @@ def mining_worker(worker_id, flags, initial_seed):
         initial_seed: Initial seed hash for VM initialization
     """
     global current_batch_size, hash_counter
+    
+    # Thread-local hash counter (optimization)
+    thread_local_hash_count = 0
+    SYNC_THRESHOLD = 5000  # Sync every 5000 hashes instead of 50
+    
     try:
         SetThreadPriority = ctypes.windll.kernel32.SetThreadPriority
         GetCurrentThread = ctypes.windll.kernel32.GetCurrentThread
@@ -685,10 +690,14 @@ def mining_worker(worker_id, flags, initial_seed):
             hash_bytes = bytes(ffi.buffer(hash_output_buffer, 32))
             hash_int = int.from_bytes(hash_bytes[0:8], "little")
             local_count += 1
-            if local_count >= 50:
+            thread_local_hash_count += 1
+            
+            # Sync to global counter only when threshold reached (reduced lock contention)
+            if thread_local_hash_count >= SYNC_THRESHOLD:
                 with hash_counter_lock:
-                    hash_counter += local_count
-                local_count = 0
+                    hash_counter += thread_local_hash_count
+                thread_local_hash_count = 0
+            
             if hash_int < current_target_int and meets_submit_throttle(hash_int, args.submit_throttle):
                 try:
                     submit_queue.put_nowait({
@@ -700,9 +709,7 @@ def mining_worker(worker_id, flags, initial_seed):
                     })
                 except queue.Full:
                     pass
-        if local_count:
-            with hash_counter_lock:
-                hash_counter += local_count
+        
         batch_time = time.time() - batch_start
         if batch_time > 0:
             scale = TARGET_BATCH_TIME / batch_time
@@ -713,9 +720,16 @@ def mining_worker(worker_id, flags, initial_seed):
                 current_batch_size = new_batch
             if args.debug and worker_id == 0 and not args.background:
                 BackgroundLogger.debug(f"BATCH {batch_size} -> {new_batch} ({batch_time:.3f}s)")
+    
+    # Final sync on exit
+    if thread_local_hash_count > 0:
+        with hash_counter_lock:
+            hash_counter += thread_local_hash_count
+    
     vm.destroy()
     if not args.background:
         print(f"[{datetime.now().strftime('%H:%M:%S')}]  [CPU] worker {worker_id}: stopped")
+
 
 def job_queue_monitor():
     """Monitor and maintain adequate job supply in job queue"""
@@ -731,6 +745,41 @@ def job_queue_monitor():
                 except queue.Full:
                     break
         time.sleep(0.05)
+
+
+def connection_heartbeat_monitor():
+    """
+    Monitor connection health and send periodic keepalive messages
+    Helps detect dead connections faster than waiting for timeout
+    """
+    global pool_socket
+    last_activity = time.time()
+    
+    while not shutdown_flag.is_set():
+        shutdown_flag.wait(45)  # Check every 45 seconds
+        
+        if shutdown_flag.is_set():
+            break
+        
+        # Check if we've had any network activity recently
+        elapsed = time.time() - last_activity
+        
+        # If no activity for 90s, send keepalive
+        if elapsed > 90 and pool_socket:
+            try:
+                keepalive_msg = {
+                    "id": 999,
+                    "method": "keepalived",
+                    "params": {}
+                }
+                stratum_send(pool_socket, keepalive_msg)
+                if args.debug and not args.background:
+                    BackgroundLogger.debug(f"Sent keepalive (idle for {elapsed:.0f}s)")
+            except Exception as e:
+                if args.debug:
+                    BackgroundLogger.debug(f"Keepalive send failed: {e}")
+        
+        last_activity = time.time()
 
 def submit_worker(sock):
     """
@@ -818,18 +867,31 @@ def cleanup_pending_submits():
                 BackgroundLogger.debug(f"CLEANUP Removed {len(stale)} stale pending submits")
 
 def main():
-    """Main miner initialization and control loop"""
+    """Main miner initialization and control loop with startup retry logic"""
     global session_id, latest_job, pool_socket, pool_host, pool_port
     optimize_mining_environment()
-    #if not args.background:
-        #print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.BLUE}[INF]{Style.RESET_ALL} Starting PYRIG Miner")
-    try:
-        pool_host, pool_port = parse_pool_url(args.url, args.tls)
-        pool_socket = create_pool_connection(pool_host, pool_port, args.tls, args.tls_insecure)
-        pool_socket.settimeout(30)
-    except Exception as e:
-        BackgroundLogger.error(f"Connection failed: {e}")
-        sys.exit(1)
+    
+    # Startup retry logic
+    max_startup_retries = 5
+    startup_retry_count = 0
+    
+    while startup_retry_count < max_startup_retries:
+        try:
+            pool_host, pool_port = parse_pool_url(args.url, args.tls)
+            pool_socket = create_pool_connection(pool_host, pool_port, args.tls, args.tls_insecure)
+            pool_socket.settimeout(30)
+            break  # Success, exit retry loop
+        except Exception as e:
+            startup_retry_count += 1
+            if startup_retry_count >= max_startup_retries:
+                BackgroundLogger.error(f"Startup failed after {max_startup_retries} attempts: {e}")
+                sys.exit(1)
+            
+            backoff = min(30, 3 ** startup_retry_count)  # 3s, 9s, 27s
+            if not args.background:
+                print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.YELLOW}[WRN]{Style.RESET_ALL} Connection failed: {e}")
+                print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.YELLOW}[WRN]{Style.RESET_ALL} Retrying in {backoff}s... (attempt {startup_retry_count}/{max_startup_retries})")
+            time.sleep(backoff)
     if not args.background:
         print(f"[{datetime.now().strftime('%H:%M:%S')}]  {Back.MAGENTA}[NET]{Style.RESET_ALL} use pool: {pool_host}:{pool_port}")
     recv_thread = threading.Thread(target=stratum_recv_loop, args=(pool_socket,), daemon=True)
@@ -921,6 +983,8 @@ def main():
     submit_thread.start()
     cleanup_thread = threading.Thread(target=cleanup_pending_submits, daemon=True)
     cleanup_thread.start()
+    heartbeat_thread = threading.Thread(target=connection_heartbeat_monitor, daemon=True)
+    heartbeat_thread.start()
     sampler_thread = threading.Thread(target=hashrate_sampler, daemon=True)
     sampler_thread.start()
     def stats_printer():
